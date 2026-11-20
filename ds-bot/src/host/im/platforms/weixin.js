@@ -140,11 +140,17 @@ export default {
         // Voice items carry their transcript in voice_item.text.
         else if (item.type === 3 && item.voice_item?.text !== undefined) texts.push(String(item.voice_item.text))
         else if (item.type === 2 && item.image_item?.media !== undefined) {
-          const bytes = await image(item.image_item.media, env, stopping.signal).catch(() => undefined)
+          const bytes = await mediaBytes(item.image_item.media, env, stopping.signal).catch(() => undefined)
           if (stopping.signal.aborted) return
           if (bytes !== undefined) images.push({ mediaType: 'image/jpeg', data: bytes.toString('base64') })
         }
-        else if (item.type === 4 && item.file_item !== undefined) files.push({ name: String(item.file_item.file_name ?? 'file'), data: undefined })
+        // A file carries its content like an image does: a CDN URL and a base64 AES
+        // key. The name alone is useless to the host, so fetch the bytes here.
+        else if (item.type === 4 && item.file_item !== undefined) {
+          const bytes = await mediaBytes(item.file_item.media ?? item.file_item, env, stopping.signal).catch(() => undefined)
+          if (stopping.signal.aborted) return
+          files.push({ name: String(item.file_item.file_name ?? 'file'), data: bytes })
+        }
       }
       await handlers.onMessage({
         chat: { key: userId, kind: 'direct', title: '' },
@@ -444,8 +450,8 @@ async function request(env, baseUrl, token, endpoint, body, timeoutMs = POLL_TIM
   return json
 }
 
-// Inbound images: the CDN URL plus a base64 AES-128 key (ECB, PKCS7).
-async function image(media, env, signal) {
+// Inbound media (an image, or a file): the CDN URL plus a base64 AES-128 key (ECB, PKCS7).
+async function mediaBytes(media, env, signal) {
   const url = String(media.full_url ?? media.url ?? '')
   if (url === '') return undefined
   const response = await env.fetch(url, { signal })
