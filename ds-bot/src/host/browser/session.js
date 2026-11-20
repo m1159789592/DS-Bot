@@ -115,9 +115,19 @@ export async function openBotBrowser({ botId, profileRoot, downloadDir, headless
       // prints a security banner otherwise.
       chromiumSandbox: true,
       ...(executablePath ? { executablePath } : {}),
-      args: ['--disable-dev-shm-usage'],
+      // Google refuses an OAuth sign-in from a browser that announces itself as
+      // automation-controlled. Drop Playwright's automation switch and the flag
+      // that Chromium would otherwise leave on; the init script below hides the
+      // webdriver property the page can still read.
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: ['--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
     })
   if (!context) throw new Error('The app browser relay has no browser context.')
+  // Runs on every navigation of every page in this context, so the site never
+  // sees navigator.webdriver as true.
+  await context.addInitScript(() => {
+    try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }) } catch { /* frozen */ }
+  }).catch(() => {})
   const page = context.pages()[0] ?? await context.newPage()
   const cookieFile = join(userDataDir, 'cookies.json')
   if (!browser) {
