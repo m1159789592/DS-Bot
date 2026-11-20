@@ -102,7 +102,7 @@ const parseJson = text => {
 
 // A send counts as delivered when dws says so; older builds only report
 // `"success": true` inside a ledger.
-const sendWorked = ({ code, out, err }) => {
+const sendWorked = ({ code, out }) => {
   if (code !== 0) return false
   const data = parseJson(out)
   if (data === undefined) return /"ok"\s*:\s*true|"success"\s*:\s*true/.test(out)
@@ -156,8 +156,6 @@ const allowed = (fields, id, name) => {
   if (list.length === 0) return true
   return list.includes(id) || list.includes(name)
 }
-
-const STRIP_HINT = /\n?注意[：:]\s*如需下载[\s\S]*$/
 
 // An image/file message arrives as `[图片消息](mediaId=…)` plus a download hint
 // instead of words; the placeholder is the only thing that names the resource.
