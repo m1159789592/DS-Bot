@@ -34942,7 +34942,7 @@ function AddView({ platform, roster, actions, onBack }) {
   const [busy, setBusy] = (0, import_react44.useState)(false);
   const [error, setError] = (0, import_react44.useState)(null);
   const set = (key, value) => setFields((current2) => ({ ...current2, [key]: value }));
-  const missing = shown.fields.some((field) => !field.options && String(fields[field.key] ?? "").trim() === "");
+  const missing = shown.fields.some((field) => !field.options && !field.optional && String(fields[field.key] ?? "").trim() === "");
   const add = () => {
     if (busy || botId === "" || missing) return;
     setBusy(true);

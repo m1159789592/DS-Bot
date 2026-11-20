@@ -1223,7 +1223,7 @@ export function install(rt) {
       if (platform.login === 'qr') throw new Error('This platform signs in by scanning a code; not available yet')
       const fields = cleanFields(platform, body.fields)
       for (const field of platform.fields) {
-        if (!field.options && (fields[field.key] === undefined || String(fields[field.key]).trim() === '')) throw new Error(`${field.label} is required`)
+        if (!field.options && !field.optional && (fields[field.key] === undefined || String(fields[field.key]).trim() === '')) throw new Error(`${field.label} is required`)
       }
       const env = await envFor({ id: 'im_check', platform: platform.id, settings: fields, secrets: {} }, { get: () => ({}), set: () => {} })
       const { account } = await checkAccount(platform, fields, env)

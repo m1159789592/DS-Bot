@@ -196,7 +196,7 @@ function AddView({ platform, roster, actions, onBack }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const set = (key, value) => setFields(current => ({ ...current, [key]: value }))
-  const missing = shown.fields.some(field => !field.options && String(fields[field.key] ?? '').trim() === '')
+  const missing = shown.fields.some(field => !field.options && !field.optional && String(fields[field.key] ?? '').trim() === '')
   const add = () => {
     if (busy || botId === '' || missing) return
     setBusy(true); setError(null)
