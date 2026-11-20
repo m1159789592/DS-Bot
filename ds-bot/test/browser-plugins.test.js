@@ -124,6 +124,7 @@ function fakeBrowserPage({ onClick } = {}) {
   const context = new EventEmitter()
   context.pages = () => [page]
   context.cookies = async () => []
+  context.addInitScript = async () => {}
   context.close = async () => { await page.close() }
   return { page, context }
 }
