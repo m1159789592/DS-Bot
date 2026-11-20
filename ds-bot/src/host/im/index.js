@@ -3,9 +3,7 @@
 // The platform adapters (im/platforms/) own the wire; this module owns pairing,
 // routing, cards and the send queues. Only the dsh holding the team lock connects.
 import { randomBytes, randomUUID } from 'node:crypto'
-import { appendFileSync } from 'node:fs'
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { replaceFile } from '../files.js'
 import { receivedPictureName, saveToInbox } from '../inbox.js'
@@ -26,13 +24,6 @@ const NUMBERS = /^\s*\d+(\s+\d+)*\s*$/
 
 const secretField = key => key.replace(/[A-Z]/g, char => `_${char}`).toUpperCase()
 
-// Diagnostic tap for the IM origin/send path (DSH local patch). One JSON line per
-// event in %TEMP%/dsh-im-origin.log; harmless when the file is deleted.
-const imDbg = (payload) => {
-  try {
-    appendFileSync(join(tmpdir(), 'dsh-im-origin.log'), `${new Date().toISOString()} ${JSON.stringify(payload)}\n`)
-  } catch {}
-}
 export function install(rt) {
   const { ctx, state } = rt
   const imDir = join(rt.home, 'im')
@@ -457,11 +448,6 @@ export function install(rt) {
   // Turns that may be a member's late result waking a group up again: wait for the first
   // message of the turn before dropping the chat's origin (see the turn/start handler).
   const pendingReset = new Set()
-  // Safety net for a turn an IM message started: the chat that turn must answer, kept
-  // even when the classification below loses the strict origin (a context splice, a
-  // redelivery, a part switch). Cleared when the next turn starts.
-  const lastIm = new Map()
-  const imTurns = new Set()
   // Request id of an IM message → the chat it came from, until that message shows up.
   const requests = new Map()
   // IM origin held across a part switch until the resumed/handoff message opens.
@@ -523,13 +509,12 @@ export function install(rt) {
    */
   const originOf = (sessionId) => {
     const entry = sessionId === undefined ? undefined : origins.get(sessionId)
-    const miss = (reason, extra) => { imDbg({ at: 'originOf', sid: sessionId, miss: reason, ...extra }); return undefined }
-    if (entry === undefined) return miss('no-entry')
+    if (entry === undefined) return undefined
     const conn = Object.values(connections()).find(item => item.id === entry.connId)
-    if (conn === undefined || !runners.has(conn.id)) return miss('no-conn', { conn: entry.connId, runner: runners.has(entry.connId) })
-    if (entry.senderId !== undefined && !paired(conn, entry.senderId)) return miss('unpaired', { senderId: entry.senderId })
+    if (conn === undefined || !runners.has(conn.id)) return undefined
+    if (entry.senderId !== undefined && !paired(conn, entry.senderId)) return undefined
     const chat = conn.chats?.[entry.chatKey]
-    if (chat === undefined) return miss('no-chat', { chatKey: entry.chatKey })
+    if (chat === undefined) return undefined
     // The chat may have been unbound or pointed at another Bot or group while the work
     // it started keeps running; that work's late lines must not follow the old origin.
     if (entry.binding === undefined || bindingOf(conn, entry.chatKey) !== entry.binding) return undefined
@@ -1454,12 +1439,7 @@ export function install(rt) {
     if (event.type === 'turn/start') {
       const room = rt.roomOf(session.id)
       if (room === undefined) {
-        imTurns.delete(session.id)
-        // Decide the claim on the message that carries this turn, not here: one
-        // question can span several turns (a long answer with tool calls in
-        // between), and resetting at every turn/start lost the chat that asked,
-        // so the final answer never went back to it.
-        pendingReset.add(session.id)
+        resetOrigin(session.id)
       } else {
         const working = rt.roomActive?.(room.id) || (rt.roomWorkView?.()[room.id] ?? []).length > 0
         // A group's own Session can start a turn for the last member's late result after
@@ -1472,10 +1452,9 @@ export function install(rt) {
       const source = event.data?.source
       const imOrigin = source?.imOrigin
       const rpcId = source?.rpcId
-      imDbg({ ev: 'user/message', sid: session.id, seq: event.seq, rpcId, kind: source?.kind, role: source?.role, pending: pendingReset.has(session.id), hasReq: typeof rpcId === 'string' ? requests.has(rpcId) : undefined })
       // A late member result or part-switch handoff continues the work the chat asked for;
       // any other first message starts a fresh turn, which clears the previous turn's origin.
-      if (pendingReset.delete(session.id)) resetOrigin(session.id)
+      if (pendingReset.delete(session.id) && !(typeof imOrigin === 'string' || (source?.kind === SOURCE_KIND && source.role === 'post'))) resetOrigin(session.id)
       if (typeof imOrigin === 'string') {
         const resumed = resumedOrigins.get(imOrigin)
         resumedOrigins.delete(imOrigin)
@@ -1488,23 +1467,13 @@ export function install(rt) {
         const asked = requests.get(rpcId)
         requests.delete(rpcId)
         if (asked === undefined) dropOrigin(session.id)
-        else {
-          claimOrigin(session.id, asked.connId, asked.chatKey, asked.senderId, asked.binding)
-          lastIm.set(session.id, { connId: asked.connId, chatKey: asked.chatKey, at: Date.now() })
-          imTurns.add(session.id)
-        }
+        else claimOrigin(session.id, asked.connId, asked.chatKey, asked.senderId, asked.binding)
       } else if (source?.kind === REPLY_KIND) {
         // Web and phone answers carry no registered IM request.
         dropOrigin(session.id)
       } else if (source?.kind === SOURCE_KIND && source.role === 'post') {
         // A member's late result relayed into the group's own Session. The group's work
         // is still the answer to the chat that asked, wherever the member runs.
-      } else if (source !== undefined && source.kind !== 'user' && source.kind !== SOURCE_KIND) {
-        // Context the app splices into a turn behind the user's own message: runtime
-        // facts, the sampled time, a cited conversation, a condensed span or a note.
-        // Nobody asked with it, so it must not take the asking chat's claim away — doing
-        // that silently dropped the whole answer of an IM turn, which the chat never saw.
-        imDbg({ ev: 'keep-origin', sid: session.id, kind: source.kind })
       } else {
         // A message from the Web UI, a peer Bot or a scheduled task: this turn is not an
         // IM chat's to answer, even when an earlier turn of this Session was.
@@ -1514,11 +1483,9 @@ export function install(rt) {
     if (event.type === 'turn/end') {
       // A group's own Session ends its relay turn at once while its members keep
       // working and post later; only a Bot's turn ending ends the chat's claim. A
-      // pending reset means the turn never got a message to classify, so apply it now —
-      // a continuation turn has nothing new to classify and keeps the claim instead.
+      // pending reset means the turn never got a message to classify, so apply it now.
       if (rt.roomOf(session.id) === undefined) {
-        // The claim survives until the next message says what it answers: an
-        // answer can span several turns, and only the message decides.
+        resetOrigin(session.id)
         detachHeldOrigin(session.id)
       } else if (pendingReset.delete(session.id)) {
         resetOrigin(session.id)
@@ -1530,21 +1497,9 @@ export function install(rt) {
       imVia.delete(session.id)
       return
     }
-    let origin = originOf(session.id)
-    if (origin === undefined && imTurns.has(session.id)) {
-      // The turn was asked for over IM, so its answer goes back there even when the
-      // strict origin above was lost on the way.
-      const last = lastIm.get(session.id)
-      const conn = last === undefined ? undefined : Object.values(connections()).find(item => item.id === last.connId)
-      if (conn !== undefined && runners.has(conn.id) && conn.chats?.[last.chatKey] !== undefined) {
-        origin = { conn, chatKey: last.chatKey, chat: conn.chats[last.chatKey] }
-        imDbg({ ev: 'fallback', sid: session.id, chatKey: last.chatKey })
-      }
-    }
-    if (origin === undefined) { imDbg({ ev: event.type, sid: session.id, miss: true, bot: botId }); return }
-    const items = rt.displayItems(session.id, [event])
-    imDbg({ ev: event.type, sid: session.id, origin: `${origin.conn.id}/${origin.chatKey}`, items: items.map(item => item.kind) })
-    for (const item of items) {
+    const origin = originOf(session.id)
+    if (origin === undefined) return
+    for (const item of rt.displayItems(session.id, [event])) {
       if (item.kind !== 'bot' && item.kind !== 'view') continue
       const body = item.kind === 'bot' ? item.text : viewCardText({ title: item.title, view: item.view }) || (item.title ?? '')
       sendTo(origin.conn, origin.chatKey, { key: origin.chatKey, kind: origin.chat.kind, title: origin.chat.title }, body)
