@@ -110,6 +110,10 @@ export async function openBotBrowser({ botId, profileRoot, downloadDir, headless
       headless,
       viewport: { width: 1280, height: 900 },
       acceptDownloads: true,
+      // Playwright turns the sandbox off by default (--no-sandbox). The Bot is the
+      // one clicking unfamiliar links, so keep the renderer sandboxed; Chromium
+      // prints a security banner otherwise.
+      chromiumSandbox: true,
       ...(executablePath ? { executablePath } : {}),
       args: ['--disable-dev-shm-usage'],
     })
