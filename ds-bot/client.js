@@ -27755,6 +27755,20 @@ var IM_PLATFORMS = [
     groups: true
   },
   {
+    // The owner's own DingTalk account through the dws CLI: no robot app, but
+    // replies carry their identity, so only the owner should connect it.
+    id: "dingtalk-dws",
+    name: "DingTalk (dws)",
+    fields: [
+      { key: "dwsPath", label: "dws 路径（留空自动）", optional: true },
+      { key: "profile", label: "组织 profile（留空=默认）", optional: true },
+      { key: "allow", label: "允许的发送者（openId 或姓名，逗号分隔）", optional: true },
+      { key: "selfId", label: "自己的 openId（可选，挡回显）", optional: true }
+    ],
+    buttons: false,
+    groups: true
+  },
+  {
     id: "wecom",
     name: "WeCom",
     fields: [
