@@ -8,7 +8,8 @@
 // getconfig ticket. Voice items arrive with a transcript; images download
 // from the CDN and decrypt with their AES key. A refused send is permanent
 // with the platform's reason. Protocol ported from dsh-im (MIT, see NOTICE).
-import { createDecipheriv, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { readFileSync, statSync } from 'node:fs'
 
 const QR_BASE = 'https://ilinkai.weixin.qq.com/'
 const BOT_TYPE = '3'
@@ -246,6 +247,79 @@ export default {
     handlers.onStatus({ state: 'connecting' })
     void startSession()
 
+    // Outbound media: iLink carries images and files, but this connector only ever
+    // wrote text_item — a reply that points at a local file in Markdown
+    // (![alt](C:\shot.png) or [name](C:\out.xlsx)) therefore arrived as text alone.
+    // Each such reference uploads to the WeChat CDN and goes out as its own image or
+    // file item after the text. A failed upload is logged and dropped: the text has
+    // already been delivered and must not be re-sent (each conversation also has a
+    // small outbound quota, so nothing is retried here).
+    const sendMedia = async (chat, text, contextToken) => {
+      for (const ref of mediaRefs(text)) {
+        try {
+          const bytes = readFileSync(ref.path)
+          if (bytes.length === 0 || bytes.length > MEDIA_LIMIT) {
+            env.log?.warn?.('ds-bot im: weixin skipped %s (%s bytes)', ref.path, bytes.length)
+            continue
+          }
+          const padded = Math.ceil((bytes.length + 1) / 16) * 16
+          const isImage = IMAGE_EXT.test(ref.path)
+          const aesKey = randomBytes(16)
+          const slot = await call('getuploadurl', {
+            filekey: randomBytes(16).toString('hex'),
+            media_type: isImage ? 1 : 3,
+            to_user_id: chat.key,
+            rawsize: bytes.length,
+            rawfilemd5: createHash('md5').update(bytes).digest('hex'),
+            filesize: padded,
+            no_need_thumb: true,
+            aeskey: aesKey.toString('hex'),
+          })
+          if (slot.ret !== undefined && Number(slot.ret) !== 0) {
+            env.log?.warn?.('ds-bot im: weixin refused an upload slot (%s)', slot.errmsg ?? slot.ret)
+            continue
+          }
+          const uploadUrl = String(slot.upload_full_url ?? '')
+          if (uploadUrl === '') { env.log?.warn?.('ds-bot im: weixin upload slot carried no URL'); continue }
+          const cipher = createCipheriv('aes-128-ecb', aesKey, null)
+          const ciphertext = Buffer.concat([cipher.update(bytes), cipher.final()])
+          const upload = await env.fetch(uploadUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: new Uint8Array(ciphertext),
+            signal: stopping.signal,
+          })
+          const encryptedParam = upload.headers.get('x-encrypted-param')
+          if (!encryptedParam) {
+            env.log?.warn?.('ds-bot im: weixin CDN upload failed (%s): %s', upload.status, upload.headers.get('x-error-message') ?? '-')
+            continue
+          }
+          const media = {
+            encrypt_query_param: encryptedParam,
+            aes_key: Buffer.from(aesKey.toString('hex'), 'utf8').toString('base64'),
+            encrypt_type: 1,
+          }
+          const item = isImage
+            ? { type: 2, image_item: { media, mid_size: padded } }
+            : { type: 4, file_item: { media, file_name: ref.name, len: String(bytes.length) } }
+          const answer = await call('sendmessage', {
+            msg: {
+              from_user_id: '', to_user_id: chat.key,
+              client_id: `ds-bot-${randomBytes(8).toString('hex')}`,
+              message_type: 2, message_state: 2,
+              item_list: [item],
+              ...(contextToken ? { context_token: contextToken } : {}),
+            },
+          })
+          if (answer.ret !== undefined && Number(answer.ret) !== 0) {
+            env.log?.warn?.('ds-bot im: weixin refused media %s (%s)', ref.name, answer.errmsg ?? answer.ret)
+          }
+        } catch (error) {
+          env.log?.warn?.('ds-bot im: weixin media %s failed: %s', ref.name, error?.message ?? error)
+        }
+      }
+    }
+
     return {
       send: async (chat, { text }) => {
         const chunks = chunk(String(text ?? ''), TEXT_LIMIT)
@@ -266,6 +340,8 @@ export default {
           }
           messageId = clientId
         }
+        await sendMedia(chat, String(text ?? ''), contextToken).catch(error =>
+          env.log?.warn?.('ds-bot im: weixin media pass failed: %s', error?.message ?? error))
         return { messageId }
       },
       typing: async (chat) => {
@@ -380,4 +456,30 @@ async function image(media, env, signal) {
   if (key === undefined) return encrypted
   const decipher = createDecipheriv('aes-128-ecb', key, null)
   return Buffer.concat([decipher.update(encrypted), decipher.final()])
+}
+
+// Outbound media: a reply points at local files in Markdown. Only absolute or
+// ~-rooted paths that exist count, at most MEDIA_MAX per reply, so a long answer
+// full of links cannot spend the conversation's small outbound quota.
+const MEDIA_LIMIT = 20 * 1024 * 1024
+const MEDIA_MAX = 3
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i
+
+const mediaRefs = text => {
+  const found = []
+  const seen = new Set()
+  const add = value => {
+    if (found.length >= MEDIA_MAX) return
+    const path = String(value ?? '').trim().replace(/^<|>$/g, '')
+    if (!/^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path)) return
+    const key = path.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    try { if (!statSync(path).isFile()) return } catch { return }
+    found.push({ path, name: path.split(/[\\/]/).pop() || 'file' })
+  }
+  const body = String(text ?? '')
+  for (const match of body.matchAll(/!\[[^\]]*\]\(\s*<?([^)>]+?)>?\s*\)/g)) add(match[1])
+  for (const match of body.matchAll(/\[[^\]]+\]\(\s*<?([^)>]+?)>?\s*\)/g)) add(match[1])
+  return found
 }
