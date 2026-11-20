@@ -6,6 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { replaceFile } from '../files.js'
+import { receivedPictureName, saveToInbox } from '../inbox.js'
 import { viewCardText } from '../parts.js'
 import { imPlatform, IM_PLATFORMS } from '../../shared/im-platforms.js'
 import { REPLY_KIND, SOURCE_KIND } from '../constants.js'
@@ -821,7 +822,14 @@ export function install(rt) {
       : rt.sessionOfRoom(rt.roomOf(target.roomId))
     const content = []
     if (body !== '') content.push({ type: 'text', text: body })
-    for (const image of msg.images ?? []) content.push({ type: 'image', mediaType: image.mediaType, data: image.data })
+    for (const image of msg.images ?? []) {
+      content.push({ type: 'image', mediaType: image.mediaType, data: image.data })
+      // The chat keeps the picture; the same bytes also go to the downloads folder, so
+      // the user opens it there instead of asking the Bot to send it back.
+      try {
+        await saveToInbox({ data: Buffer.from(image.data, 'base64'), name: receivedPictureName(conn.platform, image.mediaType) })
+      } catch { /* a picture that could not be written still shows in the chat */ }
+    }
     const env = await envFor(conn)
     for (const file of msg.files ?? []) {
       try {

@@ -1,7 +1,7 @@
 import { fileChunks } from '../src/shared/file-chunks.js'
 import assert from 'node:assert/strict'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -16,6 +16,10 @@ import { shrink } from '../src/host/preview-worker.js'
 // A team with no model: Sessions are made in memory, a group round runs on answers
 // played back through the session/event listeners, and `history` holds the events
 // each Session's page reads, oldest first.
+// Files a phone sends are written to the downloads folder; the tests point that at a
+// folder of their own, so a run never touches the user's.
+const inbox = mkdtempSync(join(tmpdir(), 'ds-bot-inbox-'))
+process.env.DS_BOT_INBOX = inbox
 function start(config = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-mobile-'))
   const ctx = fakeContext({ services: { attachments: fakeAttachments() } })
@@ -375,6 +379,46 @@ test('a phone stages photos one by one, then send puts them in one message with 
   assert.equal((await call('send', { sessionId: chief, text: '', images: [third] })).ok, true)
   assert.deepEqual(sent.at(-1).prompt.content, [{ type: 'image', mediaType: 'image/jpeg', data: pixel }])
   assert.equal((await call('hello', {})).value.capabilities.includes('send-images'), true)
+  await stop()
+})
+
+test('a phone sends a file in pieces, and it lands in the downloads folder', async () => {
+  const { call, sent, stop } = start()
+  const { chief } = await team(call)
+  const head = Buffer.from('the cold store')
+  const tail = Buffer.from(' layout')
+  const base64 = bytes => bytes.toString('base64')
+  assert.deepEqual(await call('stage-file-chunk', { name: 'plan.txt', offset: 0, data: 'not base64!' }), { ok: false, error: { code: 'bot/invalid', message: 'This is not a file DS Bot can send', details: {} } })
+  assert.deepEqual(await call('stage-file-chunk', { name: '  ', offset: 0, data: base64(head) }), { ok: false, error: { code: 'bot/invalid', message: 'This is not a file DS Bot can send', details: {} } })
+  // The path the phone gave is dropped: the file is stored under its own name.
+  const first = (await call('stage-file-chunk', { name: 'C:\\Users\\messier\\plan.txt', offset: 0, data: base64(head) })).value
+  assert.equal(first.nextOffset, head.length)
+  // A piece out of place is refused rather than quietly written at the wrong offset.
+  assert.equal((await call('stage-file-chunk', { id: first.id, offset: 0, data: base64(tail) })).error.code, 'bot/stale')
+  const second = (await call('stage-file-chunk', { id: first.id, offset: head.length, data: base64(tail) })).value
+  assert.equal(second.nextOffset, head.length + tail.length)
+  const staged = (await call('stage-file-end', { id: first.id })).value
+  assert.equal(staged.name, 'plan.txt')
+  assert.equal(staged.bytes, head.length + tail.length)
+  // The file is on the disk, whole, under the name the phone gave.
+  assert.equal(staged.path, join(inbox, 'plan.txt'))
+  assert.equal(readFileSync(staged.path, 'utf8'), 'the cold store layout')
+  // The upload is closed once its file is stored.
+  assert.equal((await call('stage-file-end', { id: first.id })).error.code, 'bot/stale')
+  const before = sent.length
+  assert.equal((await call('send', { sessionId: chief, text: 'read this', files: [staged.id] })).value, true)
+  const prompt = sent.slice(before).find(entry => entry.prompt !== undefined).prompt
+  // The message names the path instead of carrying a copy of the file.
+  assert.deepEqual(prompt.content, [{ type: 'text', text: 'read this' }, { type: 'text', text: staged.path }])
+  // A file goes once, and a file alone is a message.
+  assert.equal((await call('send', { sessionId: chief, text: '', files: [staged.id] })).error.code, 'bot/stale')
+  const again = (await call('stage-file-chunk', { name: 'plan.txt', offset: 0, data: base64(head) })).value
+  const last = (await call('stage-file-end', { id: again.id })).value
+  // A name already there is kept: the second file becomes "plan (2).txt".
+  assert.equal(last.path, join(inbox, 'plan (2).txt'))
+  assert.equal((await call('send', { sessionId: chief, text: '', files: [last.id] })).ok, true)
+  assert.deepEqual(sent.at(-1).prompt.content, [{ type: 'text', text: last.path }])
+  assert.equal((await call('hello', {})).value.capabilities.includes('send-files'), true)
   await stop()
 })
 

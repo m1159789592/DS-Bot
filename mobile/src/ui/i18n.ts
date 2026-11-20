@@ -9,6 +9,8 @@ const ZH = DICTIONARY.zh as Record<string, string>
 const MOBILE_SENSE = new Set(['New', 'Light', 'Back', 'Unknown'])
 
 const MOBILE_ZH: Record<string, string> = {
+  'Add files': '添加文件',
+  '{name} is larger than 100 MB': '{name} 超过 100 MB',
   'Asks for the secret {name}': '请求密钥 {name}',
   '{bot} asks for the secret {name}': '{bot} 请求密钥 {name}',
   'Pair with your computer': '与电脑配对',

@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { install as installBtw } from './btw.js'
+import { saveToInbox } from './inbox.js'
 import { install as installSide } from './side.js'
 import { handoffReply, questionReply, viewReply } from './parts.js'
 import { threadCurrentOfPart } from './threads.js'
@@ -10,6 +11,26 @@ import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
 
 const STAGED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 const STAGED_MS = 30 * 60_000
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/
+// A document arrives in pieces, because one encrypted message carries a few MB: the
+// phone reads the file a slice at a time and says when the last one is in. The whole
+// file is bounded by what the host is willing to hold in memory once.
+const UPLOAD_CHUNK_MAX = 1536 * 1024
+const UPLOAD_CHUNK_BASE64_MAX = Math.ceil(UPLOAD_CHUNK_MAX / 3) * 4 + 4
+const UPLOAD_MAX = 100 * 1024 * 1024
+const UPLOAD_KEPT = 8
+const STAGED_NAME_MAX = 120
+
+// The name the phone gave a file, made safe to store: no path, no control characters,
+// and short enough that a listing keeps its line.
+function stagedName(value) {
+  // Control characters are dropped by code point, never matched by a regular
+  // expression: a name that carries one is either broken or trying to break a listing.
+  const cleaned = Array.from(String(value ?? ''), ch => (ch.codePointAt(0) < 0x20 || ch.codePointAt(0) === 0x7f ? '' : ch)).join('')
+  const name = cleaned.split(/[\\/]/).pop().trim()
+  if (name === '' || name === '.' || name === '..') return ''
+  return name.slice(0, STAGED_NAME_MAX)
+}
 
 const LANGUAGES = {
   zh: 'Chinese (简体中文)',
@@ -55,6 +76,10 @@ export function install(rt) {
 
   // Photos staged by `stage-image`, kept until the message that names them is sent.
   const staged = new Map()
+  // Files staged by `stage-file-end`, held as the path they were written to.
+  const stagedFiles = new Map()
+  // Files still arriving, by upload id: the pieces so far and how many bytes they are.
+  const uploads = new Map()
   const ok = value => ({ ok: true, value })
   const fail = (message, code = 'bot/error') => ({ ok: false, error: { code, message, details: {} } })
   // Models come from DSH, not state.json, so a provider added on the Models pages of Settings
@@ -697,28 +722,83 @@ export function install(rt) {
         case 'stage-image': {
           const mediaType = String(body.mediaType ?? '')
           const data = typeof body.data === 'string' ? body.data : ''
-          if (!STAGED_TYPES.has(mediaType) || data === '' || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return fail('This is not a photo DS Bot can send', 'bot/invalid')
+          if (!STAGED_TYPES.has(mediaType) || data === '' || !BASE64.test(data)) return fail('This is not a photo DS Bot can send', 'bot/invalid')
           const now = Date.now()
           for (const [id, entry] of staged) if (entry.at < now - STAGED_MS) staged.delete(id)
           const id = randomUUID()
           staged.set(id, { mediaType, data, at: now })
           return ok({ id })
         }
+        // One piece of a document. The first piece names the file and opens the upload;
+        // the rest carry its id. `offset` is where the piece belongs, so a lost or
+        // repeated piece is refused instead of quietly corrupting the file.
+        case 'stage-file-chunk': {
+          const data = typeof body.data === 'string' ? body.data : ''
+          if (data === '' || !BASE64.test(data)) return fail('This is not a file DS Bot can send', 'bot/invalid')
+          if (data.length > UPLOAD_CHUNK_BASE64_MAX) return fail('A piece of a file is larger than one message carries', 'bot/invalid')
+          const bytes = Buffer.from(data, 'base64')
+          if (bytes.length === 0) return fail('This is not a file DS Bot can send', 'bot/invalid')
+          const now = Date.now()
+          const asked = typeof body.id === 'string' ? body.id : ''
+          let upload = asked === '' ? undefined : uploads.get(asked)
+          if (asked !== '' && upload === undefined) return fail('This upload is no longer open. Send the file again.', 'bot/stale')
+          if (upload === undefined) {
+            const name = stagedName(body.name)
+            if (name === '') return fail('This is not a file DS Bot can send', 'bot/invalid')
+            for (const [id, entry] of uploads) if (entry.at < now - STAGED_MS) uploads.delete(id)
+            // The oldest upload gives way to a new one rather than growing without bound.
+            if (uploads.size >= UPLOAD_KEPT) uploads.delete([...uploads.keys()][0])
+            upload = { id: randomUUID(), name, parts: [], bytes: 0, at: now }
+            uploads.set(upload.id, upload)
+          }
+          if (Number(body.offset) !== upload.bytes) return fail('This upload lost its place. Send the file again.', 'bot/stale')
+          if (upload.bytes + bytes.length > UPLOAD_MAX) {
+            uploads.delete(upload.id)
+            return fail('This file is larger than the 100 MB one upload carries', 'bot/invalid')
+          }
+          upload.parts.push(bytes)
+          upload.bytes += bytes.length
+          upload.at = now
+          return ok({ id: upload.id, nextOffset: upload.bytes })
+        }
+        // The last piece is in: the file is written into the downloads folder, so the
+        // user can open it without asking the Bot for it first. The message carries its
+        // path, and one file lives in one place.
+        case 'stage-file-end': {
+          const id = String(body.id ?? '')
+          const upload = uploads.get(id)
+          if (upload === undefined) return fail('This upload is no longer open. Send the file again.', 'bot/stale')
+          uploads.delete(id)
+          const saved = await saveToInbox({ data: Buffer.concat(upload.parts), name: upload.name })
+          const now = Date.now()
+          for (const [held, entry] of stagedFiles) if (entry.at < now - STAGED_MS) stagedFiles.delete(held)
+          const stagedId = randomUUID()
+          stagedFiles.set(stagedId, { name: saved.name, path: saved.path, at: now })
+          return ok({ id: stagedId, name: saved.name, bytes: upload.bytes, path: saved.path })
+        }
         case 'send': {
           const text = String(body.text ?? '').trim()
           const ids = Array.isArray(body.images) ? body.images.map(String) : []
-          if ((text === '' && ids.length === 0) || typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
+          const fileIds = Array.isArray(body.files) ? body.files.map(String) : []
+          if ((text === '' && ids.length === 0 && fileIds.length === 0) || typeof body.sessionId !== 'string') return fail('Nothing to send', 'bot/invalid')
           const images = ids.map(id => staged.get(id))
           if (images.some(entry => entry === undefined)) return fail('A photo did not arrive. Send it again.', 'bot/stale')
+          const files = fileIds.map(id => stagedFiles.get(id))
+          if (files.some(entry => entry === undefined)) return fail('A file did not arrive. Send it again.', 'bot/stale')
           await rt.load()
+          // Where each file sits, on its own line: the Bot opens it from there, and the
+          // user sees the same path in the chat.
+          const paths = files.map(entry => entry.path).join('\n')
           await rt.sendUser({
             sessionId: body.sessionId,
             content: [
               ...(text === '' ? [] : [{ type: 'text', text }]),
               ...images.map(({ mediaType, data }) => ({ type: 'image', mediaType, data })),
+              ...(paths === '' ? [] : [{ type: 'text', text: paths }]),
             ],
           })
           for (const id of ids) staged.delete(id)
+          for (const id of fileIds) stagedFiles.delete(id)
           return ok(true)
         }
         case 'btw-delete': {

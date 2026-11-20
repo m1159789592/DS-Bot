@@ -33,6 +33,12 @@ export function PlusIcon({ size = 16, color }: IconProps) {
   return h(Svg, { width: size, height: size, viewBox: '0 0 20 20' },
     h(Path, { d: 'M10 4v12M4 10h12', stroke: use(color, p.ink2), strokeWidth: 1.6, strokeLinecap: 'round' }))
 }
+// A document: a sheet with its folded corner, for the files a message carries.
+export function FileIcon({ size = 16, color }: IconProps) {
+  const { p } = useTheme()
+  return h(Svg, { width: size, height: size, viewBox: '0 0 20 20', fill: 'none', stroke: use(color, p.ink2), strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' },
+    h(Path, { d: 'M5 3.5h6l4 4v9H5z' }), h(Path, { d: 'M11 3.5v4h4' }))
+}
 export function ArrowUpIcon({ size = 16, color }: IconProps) {
   const { p } = useTheme()
   return h(Svg, { width: size, height: size, viewBox: '0 0 20 20' },

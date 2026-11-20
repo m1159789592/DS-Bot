@@ -30,6 +30,7 @@ export const CAPABILITIES = [
   'room-chat',
   'send',
   'send-images',
+  'send-files',
   'feed',
   'feed-room',
   'notices',

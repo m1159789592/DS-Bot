@@ -1,11 +1,14 @@
+import * as DocumentPicker from 'expo-document-picker'
+import { File } from 'expo-file-system'
 import * as Haptics from 'expo-haptics'
 import * as ImagePicker from 'expo-image-picker'
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator'
 import { useState } from 'react'
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { FILE_MAX_BYTES, fileSizeText, type PickedFile } from '../../team/send-files.ts'
 import { t } from '../../ui/i18n.ts'
-import { ArrowUpIcon, CloseIcon, PlusIcon, StopIcon } from '../../ui/icons.tsx'
+import { ArrowUpIcon, CloseIcon, FileIcon, PlusIcon, StopIcon } from '../../ui/icons.tsx'
 import { radius, shadow, type as typeScale, type Palette } from '../../ui/tokens.ts'
 
 // A photo ready to send: shown from `uri`, sent as base64 JPEG.
@@ -24,14 +27,15 @@ async function prepare(asset: ImagePicker.ImagePickerAsset): Promise<Photo> {
 
 // The composer card: min height 44, radius 22 (18 when multi-line), level-1
 // shadow; send is a 36px accent circle. While the Bot runs and the draft is
-// empty a stop button shows instead of send. "+" adds photos when the
-// computer takes them.
-export function Composer({ name, running, canStop, canAttach, onSend, onStop, p }: {
-  name: string; running: boolean; canStop: boolean; canAttach: boolean
-  onSend: (text: string, photos: Photo[]) => Promise<void>; onStop: () => void; p: Palette
+// empty a stop button shows instead of send. "+" adds photos and the clip adds
+// documents, each when the computer takes them.
+export function Composer({ name, running, canStop, canAttach, canAttachFiles, onSend, onStop, p }: {
+  name: string; running: boolean; canStop: boolean; canAttach: boolean; canAttachFiles: boolean
+  onSend: (text: string, photos: Photo[], files: PickedFile[]) => Promise<void>; onStop: () => void; p: Palette
 }) {
   const [text, setText] = useState('')
   const [photos, setPhotos] = useState<Photo[]>([])
+  const [files, setFiles] = useState<PickedFile[]>([])
   const [preparing, setPreparing] = useState(false)
   const [pickError, setPickError] = useState<string | null>(null)
   // Float above the home indicator (iOS) or the gesture bar (Android, drawn edge to
@@ -40,14 +44,16 @@ export function Composer({ name, running, canStop, canAttach, onSend, onStop, p 
   const insets = useSafeAreaInsets()
   const bottom = Math.max(insets.bottom, 10)
   const draft = text.trim()
-  const ready = (draft !== '' || photos.length > 0) && !preparing
+  const attached = photos.length > 0 || files.length > 0
+  const ready = (draft !== '' || attached) && !preparing
   // The message shows in the chat at once; the composer is free for the next one.
   const send = () => {
     if (!ready) return
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-    const sending = photos
-    setText(''); setPhotos([])
-    void onSend(draft, sending)
+    const sendingPhotos = photos
+    const sendingFiles = files
+    setText(''); setPhotos([]); setFiles([])
+    void onSend(draft, sendingPhotos, sendingFiles)
   }
   const pick = async () => {
     setPickError(null)
@@ -61,13 +67,38 @@ export function Composer({ name, running, canStop, canAttach, onSend, onStop, p 
       setPickError(failure instanceof Error ? failure.message : String(failure))
     } finally { setPreparing(false) }
   }
-  const multi = text.includes('\n') || text.length > 80 || photos.length > 0
+  // A document is only read when the message is sent: the chip shows its name and size
+  // now, and the bytes travel in pieces afterwards, so a large file is never held whole.
+  const pickFiles = async () => {
+    setPickError(null)
+    const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true })
+    if (result.canceled || result.assets.length === 0) return
+    const picked: PickedFile[] = []
+    for (const asset of result.assets) {
+      const size = typeof asset.size === 'number' ? asset.size : new File(asset.uri).size
+      if (size > FILE_MAX_BYTES) { setPickError(t('{name} is larger than 100 MB', { name: asset.name })); continue }
+      picked.push({ name: asset.name, uri: asset.uri, size })
+    }
+    setFiles(prev => [...prev, ...picked])
+  }
+  const multi = text.includes('\n') || text.length > 80 || attached
   return (
     <View style={{ marginBottom: bottom }}>
       {pickError !== null ? <Text style={[typeScale.small, { color: p.danger, textAlign: 'center', marginBottom: 4 }]}>{pickError}</Text> : null}
       <View style={[styles.card, { backgroundColor: p.card, borderRadius: multi ? radius.composerLong : radius.composer, borderColor: p.line2 }]}>
-        {photos.length > 0 || preparing ? (
+        {attached || preparing ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={styles.photos} keyboardShouldPersistTaps="handled">
+            {files.map(file => (
+              <View key={`${file.name}-${file.size}`} style={[styles.doc, { backgroundColor: p.hover, borderColor: p.line2 }]}>
+                <FileIcon size={16} color={p.ink2} />
+                <Text numberOfLines={1} style={[typeScale.small, { color: p.ink, maxWidth: 96 }]}>{file.name}</Text>
+                <Text style={[typeScale.small, { color: p.ink3 }]}>{fileSizeText(file.size)}</Text>
+                <Pressable accessibilityRole="button" accessibilityLabel={t('Remove')} hitSlop={8} onPress={() => setFiles(prev => prev.filter(entry => entry !== file))}
+                  style={[styles.unpick, { backgroundColor: p.ink }]}>
+                  <CloseIcon size={10} color={p.main} />
+                </Pressable>
+              </View>
+            ))}
             {photos.map(photo => (
               <View key={photo.uri}>
                 <Image source={{ uri: photo.uri }} style={[styles.photo, { backgroundColor: p.hover }]} />
@@ -86,8 +117,13 @@ export function Composer({ name, running, canStop, canAttach, onSend, onStop, p 
               <PlusIcon size={20} color={p.ink2} />
             </Pressable>
           ) : null}
+          {canAttachFiles ? (
+            <Pressable accessibilityRole="button" accessibilityLabel={t('Add files')} onPress={() => void pickFiles()} hitSlop={6} style={styles.attach}>
+              <FileIcon size={19} color={p.ink2} />
+            </Pressable>
+          ) : null}
           <TextInput value={text} onChangeText={setText} placeholder={t('Message {name}', { name })} placeholderTextColor={p.ink3}
-            multiline style={[styles.input, { color: p.ink, paddingLeft: canAttach ? 2 : 6 }]} accessibilityLabel={t('Message {name}', { name })} />
+            multiline style={[styles.input, { color: p.ink, paddingLeft: canAttach || canAttachFiles ? 2 : 6 }]} accessibilityLabel={t('Message {name}', { name })} />
           {running && canStop && !ready
             ? <Pressable accessibilityRole="button" accessibilityLabel={t('Stop')} onPress={onStop} hitSlop={6}
                 style={[styles.send, { backgroundColor: p.accent }]}>
@@ -108,6 +144,7 @@ const styles = StyleSheet.create({
   line: { flexDirection: 'row', alignItems: 'flex-end' },
   photos: { gap: 8, paddingHorizontal: 6, paddingTop: 6, paddingBottom: 8 },
   photo: { width: 64, height: 64, borderRadius: 12 },
+  doc: { height: 64, minWidth: 96, borderRadius: 12, borderWidth: 0.5, paddingHorizontal: 8, paddingVertical: 6, justifyContent: 'space-between', alignItems: 'center' },
   unpick: { position: 'absolute', top: -5, right: -5, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   attach: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   input: { flex: 1, fontSize: 16, lineHeight: 22, paddingTop: 7, paddingBottom: 7, paddingRight: 6, maxHeight: 130 },
