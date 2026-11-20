@@ -138,6 +138,15 @@ export function mountBrowserPlugin(ctx, { toolDefs, defineTool, keyOf, profileRo
         if (disposed) throw new Error('The browser plugin is closed.')
         if (getHold?.(botId)?.by === 'user') throw new Error('The user has taken over this browser. Wait for them to give it back.')
         let session = sessions.get(botId)
+        // A window the user closed leaves a dead session behind: drop it so this
+        // call opens a fresh browser instead of failing on a page that is gone.
+        if (session !== undefined) {
+          const settled = await Promise.resolve(session).catch(() => undefined)
+          if (settled === undefined || settled.isClosed?.() === true) {
+            if (sessions.get(botId) === session) sessions.delete(botId)
+            session = undefined
+          }
+        }
         if (spec.needsBrowser && session === undefined) {
           // Store the opening promise before resolving roots so concurrent calls share the launch.
           const opening = Promise.resolve().then(async () => {

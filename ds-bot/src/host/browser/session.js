@@ -154,6 +154,14 @@ export function createSession({ context, browser, page, botId, userDataDir, cook
   let pendingDelete = null
   let pendingDeleteLocator = null
 
+  // Closing the window ends the session for real: mount.js drops a cached session
+  // that reports closed, so the next action opens a fresh browser instead of
+  // failing forever on a dead page. A persistent context emits `close`; a
+  // CDP-connected browser only emits `disconnected`.
+  const markClosed = () => { closed = true }
+  context.once?.('close', markClosed)
+  browser?.once?.('disconnected', markClosed)
+
   const ready = () => {
     if (closed) throw new Error('The browser session is closed.')
     const externalHold = getHold?.()
@@ -849,6 +857,7 @@ export function createSession({ context, browser, page, botId, userDataDir, cook
         await pending
       }
     },
+    isClosed: () => closed,
     async close() {
       closed = true
       activeDownloads?.notify?.()
