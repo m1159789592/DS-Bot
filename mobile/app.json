@@ -38,6 +38,14 @@
         }
       ],
       [
+        "expo-media-library",
+        {
+          "photosPermission": "DS Bot saves a photo you choose in a chat to your photo library.",
+          "savePhotosPermission": "DS Bot saves a photo you choose in a chat to your photo library.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "DS Bot uses the camera to scan the pairing code that your computer shows.",

@@ -8,6 +8,7 @@ import { speak, stopReading } from '../team/audio.ts'
 import type { Voice } from '../team/read-aloud.ts'
 import { onPrefsChange, readPrefs, writePrefs } from '../store.ts'
 import * as Sharing from 'expo-sharing'
+import { Asset, requestPermissionsAsync } from 'expo-media-library'
 import type { Approval, Bot, Question, Room } from '../connection.ts'
 import { createChatCache } from '../team/chat-cache.ts'
 import { connectorCanConnectOnMobile } from '../team/connectors.ts'
@@ -341,6 +342,45 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
       }
     })()
   }, [call, sessionId])
+  // A photo is taken the same way a document is: the pieces arrive at the size the camera
+  // kept, so nothing is re-encoded. Sharing hands it to another app; saving to the album
+  // needs the permission, and a refusal is said out loud.
+  const saveImage = useCallback((ref: ImageRef, target: 'share' | 'album') => {
+    if (sharing.current) return
+    sharing.current = true
+    setFileError(null)
+    void (async () => {
+      let savedNote: string | null = null
+      try {
+        setSavingNote(t('Save'))
+        const saved = await downloadFile(call, { sessionId, attachmentId: ref.attachmentId }, (done, size) => {
+          setSavingNote(size === undefined || size <= 0
+            ? t('Save')
+            : `${t('Save')} ${Math.min(99, Math.max(1, Math.round((done / size) * 100)))}%`)
+        })
+        setSavingNote(null)
+        if (target === 'album') {
+          const permission = await requestPermissionsAsync(true)
+          if (!permission.granted) throw new Error(t('Allow photo access to save this image'))
+          await Asset.create(saved.uri)
+          savedNote = t('Saved to photos')
+          return
+        }
+        if (!(await Sharing.isAvailableAsync())) throw new Error(t('Saving to the device is not available on this phone'))
+        await Sharing.shareAsync(saved.uri, { mimeType: saved.mime, dialogTitle: saved.name })
+      } catch (failure) {
+        const msg = (failure as { message?: string })?.message
+        setFileError(msg ?? t('This photo could not be saved'))
+      } finally {
+        sharing.current = false
+        if (savedNote === null) setSavingNote(null)
+        else {
+          setSavingNote(savedNote)
+          setTimeout(() => setSavingNote(current => (current === savedNote ? null : current)), 2200)
+        }
+      }
+    })()
+  }, [call, sessionId])
   const openFile = useCallback((file: FileRef) => {
     // A file the Bot presented has no attachment to read as text, so tapping it hands the
     // bytes to the phone: the share sheet opens or saves it.
@@ -593,7 +633,7 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
           </Pressable>
         </View>
       </Modal>
-      <PhotoViewer open={photos} onClose={() => setPhotos(null)} />
+      <PhotoViewer open={photos} onClose={() => setPhotos(null)} onShareImage={ref => saveImage(ref, 'share')} onSaveImage={ref => saveImage(ref, 'album')} note={savingNote} />
     </KeyboardAvoidingView>
     </PhotoViewerCtx.Provider>
   )

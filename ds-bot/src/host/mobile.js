@@ -504,7 +504,10 @@ export function install(rt) {
           if (attachmentId === undefined) continue
           const content = Array.isArray(event?.data?.content) ? event.data.content : []
           for (const block of content) {
-            if (block?.type !== 'file' || String(block.attachment?.attachmentId) !== attachmentId) continue
+            // A photo of the message is an attachment like a document: the phone saves
+            // it through the same pieces, at the size the camera kept.
+            const blockKind = block?.type
+            if ((blockKind !== 'file' && blockKind !== 'image') || String(block.attachment?.attachmentId) !== attachmentId) continue
             if (chunked) {
               // Attachment ids are content hashes. Stream only as far as this chunk needs.
               const chunks = []

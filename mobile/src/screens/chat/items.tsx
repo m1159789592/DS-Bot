@@ -410,7 +410,7 @@ function ImageGrid({ refs, sessionId, p }: { refs: ImageRef[]; sessionId: string
 }
 
 // Full-screen photos, swiped side to side: the preview at once, the original once it arrives.
-export function PhotoViewer({ open, onClose }: { open: { sessionId: string; refs: ImageRef[]; index: number } | null; onClose: () => void }) {
+export function PhotoViewer({ open, onClose, onShareImage, onSaveImage, note }: { open: { sessionId: string; refs: ImageRef[]; index: number } | null; onClose: () => void; onShareImage?: (ref: ImageRef) => void; onSaveImage?: (ref: ImageRef) => void; note?: string | null }) {
   const insets = useSafeAreaInsets()
   const width = Dimensions.get('window').width
   const [at, setAt] = useState(0)
@@ -437,9 +437,23 @@ export function PhotoViewer({ open, onClose }: { open: { sessionId: string; refs
         ) : null}
         <View style={[styles.viewerBar, { top: insets.top + 6 }]} pointerEvents="box-none">
           {refs.length > 1 ? <Text style={[typeScale.small, { color: 'rgba(255,255,255,0.8)' }]}>{`${at + 1} / ${refs.length}`}</Text> : <View />}
-          <Pressable accessibilityRole="button" onPress={onClose} hitSlop={10} style={styles.viewerClose}>
-            <Text style={[typeScale.settingsRow, { color: '#fff' }]}>{t('Done')}</Text>
-          </Pressable>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {note ? <Text style={[typeScale.small, { color: 'rgba(255,255,255,0.8)', marginRight: 6 }]}>{note}</Text> : null}
+            {/* The photo in view is the one saved, never the first of the row. */}
+            {refs[at] !== undefined && onShareImage !== undefined ? (
+              <Pressable accessibilityRole="button" onPress={() => onShareImage(refs[at])} hitSlop={8} style={styles.viewerClose}>
+                <Text style={[typeScale.settingsRow, { color: '#fff' }]}>{t('Save')}</Text>
+              </Pressable>
+            ) : null}
+            {refs[at] !== undefined && onSaveImage !== undefined ? (
+              <Pressable accessibilityRole="button" onPress={() => onSaveImage(refs[at])} hitSlop={8} style={styles.viewerClose}>
+                <Text style={[typeScale.settingsRow, { color: '#fff' }]}>{t('Save to photos')}</Text>
+              </Pressable>
+            ) : null}
+            <Pressable accessibilityRole="button" onPress={onClose} hitSlop={10} style={styles.viewerClose}>
+              <Text style={[typeScale.settingsRow, { color: '#fff' }]}>{t('Done')}</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     </Modal>
