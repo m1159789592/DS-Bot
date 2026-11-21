@@ -309,7 +309,12 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
   // Save hands the file to the phone: the host sends its bytes, the app writes them
   // to a cache file, and the system share sheet lets Android put it in Downloads or
   // open it in a viewer. A refusal names the reason in the same line as file errors.
+  // The sheet takes one request at a time: a second tap waits for the first to close
+  // instead of being refused by the system.
+  const sharing = useRef(false)
   const saveFile = useCallback((file: FileRef) => {
+    if (sharing.current) return
+    sharing.current = true
     setFileError(null)
     const targetSession = file.sessionId ?? sessionId
     const payload = file.attachmentId !== undefined
@@ -323,6 +328,8 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
       } catch (failure) {
         const msg = (failure as { message?: string })?.message
         setFileError(msg ?? t('Could not save this file'))
+      } finally {
+        sharing.current = false
       }
     })()
   }, [call, sessionId])
