@@ -96,8 +96,11 @@ function reminderText(text) {
 function replyItem(reply, id, extra = {}) {
   const who = { ...(reply.botId ? { botId: reply.botId } : {}), ...(reply.name ? { name: reply.name } : {}), ...(reply.color ? { color: reply.color } : {}) }
   const time = Number.isFinite(reply.time) ? reply.time : null
-  if (reply.kind === 'user') return { id, kind: 'user', text: String(reply.text ?? ''), time, ...extra }
-  if (reply.kind === undefined) return { id, kind: 'bot', ...who, text: String(reply.text ?? ''), time, ...(Number.isFinite(reply.duration) ? { duration: reply.duration } : {}), ...extra }
+  // A file a member attached to its post is a card in the group too.
+  const files = Array.isArray(reply.files) ? reply.files.filter(file => typeof file?.attachmentId === 'string') : []
+  const said = files.length > 0 ? { files } : {}
+  if (reply.kind === 'user') return { id, kind: 'user', text: String(reply.text ?? ''), time, ...said, ...extra }
+  if (reply.kind === undefined) return { id, kind: 'bot', ...who, text: String(reply.text ?? ''), time, ...(Number.isFinite(reply.duration) ? { duration: reply.duration } : {}), ...said, ...extra }
   if (!ROUND_EVENTS.has(reply.kind)) return undefined
   return {
     id, kind: 'event', event: reply.kind, ...who,
@@ -130,10 +133,15 @@ export function roomItems(events, rowsOf = () => []) {
         // picked-up work, stopped work or finished work is an event of the round it opens.
         if (source.logged !== undefined || source.failed !== undefined || source.resumed === true || source.stopped === true || source.done === true) continue
         const file = source.length === undefined ? undefined : content.find(block => block?.type === 'file')?.attachment
+        // A post that carried documents keeps them as cards, like the desktop chat does.
+        const attached = content
+          .filter(block => block?.type === 'file' && block.attachment !== undefined && typeof block.attachment.attachmentId === 'string')
+          .map(block => ({ attachmentId: block.attachment.attachmentId, name: block.attachment.name ?? 'file', bytes: block.attachment.bytes }))
         items.push({
           id: `${seq}`, kind: 'bot', botId: source.senderSessionId ?? null, name: source.senderName ?? null,
           text: textOf(content).replace(POST_HEADER, ''), time: event.time ?? null,
           ...(file ? { whole: { length: source.length, file } } : {}),
+          ...(attached.length > 0 ? { files: attached } : {}),
         })
       }
       continue
