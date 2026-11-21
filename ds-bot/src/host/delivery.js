@@ -1,8 +1,13 @@
 // Delivery: how one Bot, the user, or DS Bot itself puts a message into a Bot Session.
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { HISTORY_TIMEOUT_MS, LONG_HEAD, MESSAGE_INLINE_MAX, READ_LINE_MAX, SOURCE_KIND, TEXT_KEPT, TEXT_SHOW_MAX } from './constants.js'
 import { headOf, textOf } from './text.js'
+
+// A file larger than this is left to the Bot's own chat instead of being copied into a group.
+const DELIVERED_MAX_BYTES = 20 * 1024 * 1024
 
 export function install(rt) {
   const { ctx, state } = rt
@@ -193,6 +198,25 @@ export function install(rt) {
     }
   }
 
+  // A file a turn presented is stored once more as an attachment when a group post carries
+  // it, so the group shows the card and the file outlives the chat that made it.
+  async function attachDelivered(paths) {
+    const attachments = ctx.get?.('attachments')
+    if (attachments === undefined || !Array.isArray(paths) || paths.length === 0) return []
+    const kept = []
+    for (const path of paths) {
+      try {
+        const data = await readFile(path)
+        if (data.length > DELIVERED_MAX_BYTES) continue
+        const file = await attachments.saveFile({ data, name: basename(path) })
+        if (file !== undefined) kept.push(file)
+      } catch (error) {
+        rt.warn('ds-bot: a presented file was not carried into the group post: %s', error)
+      }
+    }
+    return kept
+  }
+
   // The text of a stored file, up to what the dialogs show.
   async function fileText(file) {
     const attachments = ctx.get?.('attachments')
@@ -225,5 +249,5 @@ export function install(rt) {
     return { ...record, ledger: true }
   }
 
-  Object.assign(rt, { resolveAgent, deliver, exchangeText, attachLong, fileText, exchangesOf, exchangeOf })
+  Object.assign(rt, { resolveAgent, deliver, exchangeText, attachLong, attachDelivered, fileText, exchangesOf, exchangeOf })
 }

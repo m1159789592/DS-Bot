@@ -1837,6 +1837,26 @@ export function install(rt) {
     return items
   }
 
+  // The files a turn presented. A group post repeats them so the group shows the same
+  // cards as the Bot's own chat.
+  async function deliveredFiles(sessionId, turn) {
+    if (typeof sessionId !== 'string' || sessionId === '' || !Number.isInteger(turn)) return []
+    const page = await ctx.sessionController.page(
+      { address: { kind: 'session', sessionId }, maxMessages: 80 },
+      AbortSignal.timeout(HISTORY_TIMEOUT_MS),
+    )
+    const paths = []
+    for (const record of page.records) {
+      const event = record.event
+      if (event?.type !== 'deliverables/presented') continue
+      if (Number(event.data?.turn) !== turn) continue
+      for (const file of Array.isArray(event.data?.files) ? event.data.files : []) {
+        if (typeof file?.path === 'string' && file.path !== '') paths.push(file.path)
+      }
+    }
+    return paths
+  }
+
   async function partPage(parts, index, cursor, steps = false) {
     const part = parts[index]
     const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)
@@ -2115,5 +2135,5 @@ export function install(rt) {
     return true
   }
 
-  Object.assign(rt, { clock, partsOf, partsOfThread, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, applySteps, followFolder, followEngine, heldBack, newPart, switchPart, sessionTokens: session => tokensOf(session), switchJobs: () => switches.values() })
+  Object.assign(rt, { clock, deliveredFiles, partsOf, partsOfThread, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, applySteps, followFolder, followEngine, heldBack, newPart, switchPart, sessionTokens: session => tokensOf(session), switchJobs: () => switches.values() })
 }
