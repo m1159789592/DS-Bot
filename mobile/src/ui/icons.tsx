@@ -39,6 +39,13 @@ export function FileIcon({ size = 16, color }: IconProps) {
   return h(Svg, { width: size, height: size, viewBox: '0 0 20 20', fill: 'none', stroke: use(color, p.ink2), strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' },
     h(Path, { d: 'M5 3.5h6l4 4v9H5z' }), h(Path, { d: 'M11 3.5v4h4' }))
 }
+// The read-aloud switch: a speaker with the sound leaving it.
+export function SpeakerIcon({ size = 18, color }: IconProps) {
+  const { p } = useTheme()
+  return h(Svg, { width: size, height: size, viewBox: '0 0 20 20', fill: 'none', stroke: use(color, p.ink2), strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' },
+    h(Path, { d: 'M3.6 7.8h2.6L10 4.6v10.8L6.2 12.2H3.6z' }),
+    h(Path, { d: 'M12.9 7.4a3.6 3.6 0 0 1 0 5.2M15.2 5.1a7 7 0 0 1 0 9.8' }))
+}
 export function ArrowUpIcon({ size = 16, color }: IconProps) {
   const { p } = useTheme()
   return h(Svg, { width: size, height: size, viewBox: '0 0 20 20' },

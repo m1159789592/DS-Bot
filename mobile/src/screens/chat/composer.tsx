@@ -8,7 +8,7 @@ import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, Text
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { FILE_MAX_BYTES, fileSizeText, type PickedFile } from '../../team/send-files.ts'
 import { t } from '../../ui/i18n.ts'
-import { ArrowUpIcon, CloseIcon, FileIcon, PlusIcon, StopIcon } from '../../ui/icons.tsx'
+import { ArrowUpIcon, CloseIcon, FileIcon, PlusIcon, SpeakerIcon, StopIcon } from '../../ui/icons.tsx'
 import { radius, shadow, type as typeScale, type Palette } from '../../ui/tokens.ts'
 
 // A photo ready to send: shown from `uri`, sent as base64 JPEG.
@@ -29,8 +29,9 @@ async function prepare(asset: ImagePicker.ImagePickerAsset): Promise<Photo> {
 // shadow; send is a 36px accent circle. While the Bot runs and the draft is
 // empty a stop button shows instead of send. "+" adds photos and the clip adds
 // documents, each when the computer takes them.
-export function Composer({ name, running, canStop, canAttach, canAttachFiles, onSend, onStop, p }: {
+export function Composer({ name, running, canStop, canAttach, canAttachFiles, canRead, reading, onToggleRead, onSend, onStop, p }: {
   name: string; running: boolean; canStop: boolean; canAttach: boolean; canAttachFiles: boolean
+  canRead: boolean; reading: boolean; onToggleRead: () => void
   onSend: (text: string, photos: Photo[], files: PickedFile[]) => Promise<void>; onStop: () => void; p: Palette
 }) {
   const [text, setText] = useState('')
@@ -124,6 +125,12 @@ export function Composer({ name, running, canStop, canAttach, canAttachFiles, on
           ) : null}
           <TextInput value={text} onChangeText={setText} placeholder={t('Message {name}', { name })} placeholderTextColor={p.ink3}
             multiline style={[styles.input, { color: p.ink, paddingLeft: canAttach || canAttachFiles ? 2 : 6 }]} accessibilityLabel={t('Message {name}', { name })} />
+          {canRead ? (
+            <Pressable accessibilityRole="switch" accessibilityState={{ checked: reading }} accessibilityLabel={t('Read replies aloud')}
+              onPress={onToggleRead} hitSlop={6} style={[styles.read, { backgroundColor: reading ? p.active : 'transparent' }]}>
+              <SpeakerIcon size={18} color={reading ? p.accent : p.ink2} />
+            </Pressable>
+          ) : null}
           {running && canStop && !ready
             ? <Pressable accessibilityRole="button" accessibilityLabel={t('Stop')} onPress={onStop} hitSlop={6}
                 style={[styles.send, { backgroundColor: p.accent }]}>
@@ -147,6 +154,7 @@ const styles = StyleSheet.create({
   doc: { height: 64, minWidth: 96, borderRadius: 12, borderWidth: 0.5, paddingHorizontal: 8, paddingVertical: 6, justifyContent: 'space-between', alignItems: 'center' },
   unpick: { position: 'absolute', top: -5, right: -5, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   attach: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  read: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginRight: 2 },
   input: { flex: 1, fontSize: 16, lineHeight: 22, paddingTop: 7, paddingBottom: 7, paddingRight: 6, maxHeight: 130 },
   send: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
 })

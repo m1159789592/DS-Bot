@@ -6,7 +6,7 @@ import * as Haptics from 'expo-haptics'
 import { downloadFile } from '../team/file-download.ts'
 import { speak, stopReading } from '../team/audio.ts'
 import type { Voice } from '../team/read-aloud.ts'
-import { onPrefsChange, readPrefs } from '../store.ts'
+import { onPrefsChange, readPrefs, writePrefs } from '../store.ts'
 import * as Sharing from 'expo-sharing'
 import type { Approval, Bot, Question, Room } from '../connection.ts'
 import { createChatCache } from '../team/chat-cache.ts'
@@ -276,6 +276,11 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
     return onPrefsChange(load)
   }, [])
   const readVoice: Voice = prefs.readAloudVoice === 'tide' ? 'tide' : 'stella'
+  // The switch beside the send button is the same one the settings page shows.
+  const readingReplies = prefs.readAloud === 'on'
+  const toggleReading = useCallback(() => {
+    void writePrefs({ readAloud: readingReplies ? 'off' : 'on' })
+  }, [readingReplies])
   const readText = useCallback((text: string) => {
     setVoiceError(null)
     void speak(call, text, readVoice).catch((failure: { message?: string }) => setVoiceError(failure?.message ?? t('Could not read this reply aloud')))
@@ -556,7 +561,7 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
       {fileError ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4 }]} accessibilityRole="alert">{fileError}</Text> : null}
       {voiceError ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4, marginHorizontal: 16 }]} accessibilityRole="alert">{voiceError}</Text> : null}
       {page !== null && loadError !== null ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4, marginHorizontal: 16 }]} accessibilityRole="alert">{loadError}</Text> : null}
-      <Composer name={bot?.name ?? room?.name ?? ''} running={running} canStop={canStop} canAttach={hello?.capabilities?.includes('send-images') === true} canAttachFiles={hello?.capabilities?.includes('send-files') === true} onSend={send} onStop={stop} p={p} />
+      <Composer name={bot?.name ?? room?.name ?? ''} running={running} canStop={canStop} canAttach={hello?.capabilities?.includes('send-images') === true} canAttachFiles={hello?.capabilities?.includes('send-files') === true} canRead={hello?.capabilities?.includes('read-aloud') === true} reading={readingReplies} onToggleRead={toggleReading} onSend={send} onStop={stop} p={p} />
       <Actions visible={menuText !== null} text={menuText ?? ''} p={p}
         onClose={() => setMenuText(null)}
         onSpeak={hello?.capabilities?.includes('read-aloud') === true ? () => readText(menuText ?? '') : undefined}
