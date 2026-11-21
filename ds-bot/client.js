@@ -17234,6 +17234,8 @@ body[data-bt-goal] [class*="_scroll"]:has(> [class*="_column"]){padding-top:calc
 .bt-mic{background:color-mix(in srgb,var(--bt-ink) 5%,transparent);box-shadow:inset 0 0 0 .5px var(--bt-line);color:var(--bt-ink-2)}
 .bt-mic:hover{background:color-mix(in srgb,var(--bt-ink) 10%,transparent);color:var(--bt-ink)}
 .bt-mic[aria-pressed=true]{background:#ff3e51;color:#fff;animation:bt-mic-pulse 1.4s ease-in-out infinite}
+    .bt-mic[data-armed=true]{background:#ff3e51;color:#fff;animation:none}
+    .bt-mic[data-armed=true][data-playing=true]{animation:bt-mic-pulse 1.4s ease-in-out infinite}
 @keyframes bt-mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,62,81,.35)}50%{box-shadow:0 0 0 5px rgba(255,62,81,0)}}
 .bt-voice{display:none;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);animation:bt-icon-swap ${SPRING_POP.duration}ms ${SPRING_POP.easing}}
 .bt-voice:hover{opacity:.9}
@@ -38416,11 +38418,28 @@ async function replyAudio(sessionId) {
     offset = part.nextOffset;
   }
 }
+var ARMED_KEY = "ds-bot:read-aloud";
+var WATCH_MS = 1500;
+var armedBefore = () => {
+  try {
+    return window.localStorage.getItem(ARMED_KEY) === "on";
+  } catch {
+    return false;
+  }
+};
+var rememberArmed = (on) => {
+  try {
+    window.localStorage.setItem(ARMED_KEY, on ? "on" : "off");
+  } catch {
+  }
+};
 function ComposerReadAloud({ sessionId }) {
+  const [armed, setArmed] = (0, import_react55.useState)(armedBefore);
   const [playing, setPlaying] = (0, import_react55.useState)(false);
   const [note, setNote] = (0, import_react55.useState)("");
   const audio = (0, import_react55.useRef)(null);
   const run2 = (0, import_react55.useRef)(0);
+  const seen = (0, import_react55.useRef)({ chat: "", token: "" });
   (0, import_react55.useEffect)(() => () => {
     run2.current += 1;
     audio.current?.pause();
@@ -38437,41 +38456,79 @@ function ComposerReadAloud({ sessionId }) {
     audio.current = null;
     setPlaying(false);
   };
-  const say = async () => {
-    if (playing) {
-      stop();
-      return;
-    }
-    if (sessionId === void 0) return;
-    const mine = run2.current + 1;
-    run2.current = mine;
-    setPlaying(true);
-    setNote("");
-    let url;
-    try {
-      url = URL.createObjectURL(await replyAudio(sessionId));
-      if (run2.current !== mine) {
-        URL.revokeObjectURL(url);
-        return;
+  (0, import_react55.useEffect)(() => {
+    run2.current += 1;
+    audio.current?.pause();
+    audio.current = null;
+    setPlaying(false);
+    seen.current = { chat: "", token: "" };
+  }, [sessionId]);
+  (0, import_react55.useEffect)(() => {
+    if (!armed || sessionId === void 0) return void 0;
+    let stopped = false;
+    let busy = false;
+    const play = async () => {
+      const mine = run2.current + 1;
+      run2.current = mine;
+      setPlaying(true);
+      setNote("");
+      let url;
+      try {
+        url = URL.createObjectURL(await replyAudio(sessionId));
+        if (stopped || run2.current !== mine) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        const next = new Audio(url);
+        audio.current = next;
+        next.addEventListener("ended", () => {
+          URL.revokeObjectURL(url);
+          if (audio.current !== next) return;
+          audio.current = null;
+          setPlaying(false);
+        });
+        await next.play();
+        if (run2.current !== mine) {
+          next.pause();
+          URL.revokeObjectURL(url);
+        }
+      } catch (failure) {
+        if (run2.current !== mine) return;
+        stop();
+        setNote(failure?.message ?? t("Could not read this reply aloud"));
       }
-      const next = new Audio(url);
-      audio.current = next;
-      next.addEventListener("ended", () => {
-        URL.revokeObjectURL(url);
-        if (audio.current !== next) return;
-        audio.current = null;
-        setPlaying(false);
-      });
-      await next.play();
-      if (run2.current !== mine) {
-        next.pause();
-        URL.revokeObjectURL(url);
+    };
+    const tick = async () => {
+      if (stopped || busy) return;
+      busy = true;
+      try {
+        const head = await call("read-aloud", { sessionId, peek: true });
+        if (stopped) return;
+        const token = typeof head?.seq === "number" ? `#${head.seq}` : String(head?.version ?? "");
+        if (seen.current.chat !== sessionId) {
+          seen.current = { chat: sessionId, token };
+          return;
+        }
+        if (seen.current.token === token) return;
+        seen.current = { chat: sessionId, token };
+        void play();
+      } catch {
+      } finally {
+        busy = false;
       }
-    } catch (failure) {
-      if (run2.current !== mine) return;
-      stop();
-      setNote(failure?.message ?? t("Could not read this reply aloud"));
-    }
+    };
+    void tick();
+    const timer = setInterval(tick, WATCH_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [armed, sessionId]);
+  const toggle = () => {
+    const next = !armed;
+    rememberArmed(next);
+    setArmed(next);
+    if (!next) stop();
   };
   return (0, import_react55.createElement)(
     import_react55.Fragment,
@@ -38479,11 +38536,13 @@ function ComposerReadAloud({ sessionId }) {
     (0, import_react55.createElement)("button", {
       type: "button",
       className: "bt-mic",
-      "aria-label": playing ? t("Stop reading") : t("Read the last reply aloud"),
-      "aria-pressed": playing,
-      title: playing ? t("Stop reading") : t("Read aloud"),
+      "data-armed": armed ? "true" : void 0,
+      "data-playing": playing ? "true" : void 0,
+      "aria-label": armed ? t("Stop reading") : t("Read aloud"),
+      "aria-pressed": armed,
+      title: armed ? t("Stop reading") : t("Read aloud"),
       onMouseDown: keepComposerFocus,
-      onClick: say
+      onClick: toggle
     }, (0, import_react55.createElement)(SpeakerIcon)),
     note ? (0, import_react55.createElement)("span", { className: "bt-mic-note", role: "status" }, note) : null
   );

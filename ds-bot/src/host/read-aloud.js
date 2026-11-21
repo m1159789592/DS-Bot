@@ -62,7 +62,7 @@ export function install(rt) {
   // The reply a chat would read: the last message its Bot wrote there. A fresh part opens
   // with a fixed note that is not the Bot speaking, so that one is skipped.
   async function lastReply(sessionId) {
-    if (typeof sessionId !== 'string' || sessionId === '') return ''
+    if (typeof sessionId !== 'string' || sessionId === '') return { text: '' }
     const page = await ctx.sessionController.page(
       { address: { kind: 'session', sessionId }, maxMessages: 80 },
       AbortSignal.timeout(HISTORY_TIMEOUT_MS),
@@ -71,9 +71,11 @@ export function install(rt) {
       const event = page.records[index]?.event
       if (event?.type !== 'assistant/message') continue
       const text = textOf(event.data?.message?.content)
-      if (text !== '' && text !== HANDOFF_ACK) return text
+      if (text !== '' && text !== HANDOFF_ACK) {
+        return { text, seq: Number.isInteger(event.seq) ? event.seq : undefined }
+      }
     }
-    return ''
+    return { text: '' }
   }
 
   async function synthesize(text, voice, key) {
@@ -103,9 +105,25 @@ export function install(rt) {
     if (!Number.isSafeInteger(offset) || offset < 0) throw Object.assign(new Error('Invalid audio offset'), { code: 'bot/invalid' })
 
     let version = typeof body?.version === 'string' ? body.version : undefined
+    // A switch that is on asks only which reply is the newest, so watching for one
+    // costs no voice.
+    if (body?.peek === true) {
+      const found = await lastReply(body?.sessionId)
+      if (found.text === '') throw Object.assign(new Error('Nothing to read'), { code: 'bot/invalid' })
+      const full = Array.from(speechText(found.text))
+      const text = full.slice(0, MAX_CHARS).join('')
+      return {
+        peek: true,
+        voice,
+        seq: found.seq ?? null,
+        version: createHash('sha256').update(voice).update('\u0000').update(text).digest('hex').slice(0, 24),
+        chars: text.length,
+        truncated: full.length > MAX_CHARS,
+      }
+    }
     let made = version === undefined ? undefined : spoken.get(version)
     if (made === undefined) {
-      const raw = speechText(body?.text ?? await lastReply(body?.sessionId))
+      const raw = speechText(body?.text ?? (await lastReply(body?.sessionId)).text)
       const full = Array.from(raw)
       const text = full.slice(0, MAX_CHARS).join('')
       if (text === '') throw Object.assign(new Error('Nothing to read'), { code: 'bot/invalid' })

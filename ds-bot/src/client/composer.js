@@ -122,13 +122,28 @@ async function replyAudio(sessionId) {
   }
 }
 
+// The switch belongs to the user, not to a chat: it stays on when another chat opens, and
+// a chat it is already on for reads only what arrives after it, never the history it
+// opened with.
+const ARMED_KEY = 'ds-bot:read-aloud'
+const WATCH_MS = 1500
+const armedBefore = () => {
+  try { return window.localStorage.getItem(ARMED_KEY) === 'on' } catch { return false }
+}
+const rememberArmed = (on) => {
+  try { window.localStorage.setItem(ARMED_KEY, on ? 'on' : 'off') } catch { /* a browser that keeps nothing */ }
+}
+
 export function ComposerReadAloud({ sessionId }) {
+  const [armed, setArmed] = useState(armedBefore)
   const [playing, setPlaying] = useState(false)
   const [note, setNote] = useState('')
   const audio = useRef(null)
   // Making the voice takes a moment. A stop in that moment must keep it quiet, so every
   // play takes a number and a play that lost it says nothing.
   const run = useRef(0)
+  // The newest reply this chat had when the switch last looked, so it is not read twice.
+  const seen = useRef({ chat: '', token: '' })
   useEffect(() => () => {
     run.current += 1
     audio.current?.pause()
@@ -145,39 +160,79 @@ export function ComposerReadAloud({ sessionId }) {
     audio.current = null
     setPlaying(false)
   }
-  const say = async () => {
-    // The same button stops what it started.
-    if (playing) { stop(); return }
-    if (sessionId === undefined) return
-    const mine = run.current + 1
-    run.current = mine
-    setPlaying(true)
-    setNote('')
-    let url
-    try {
-      url = URL.createObjectURL(await replyAudio(sessionId))
-      if (run.current !== mine) { URL.revokeObjectURL(url); return }
-      const next = new Audio(url)
-      audio.current = next
-      next.addEventListener('ended', () => {
-        URL.revokeObjectURL(url)
-        if (audio.current !== next) return
-        audio.current = null
-        setPlaying(false)
-      })
-      await next.play()
-      if (run.current !== mine) { next.pause(); URL.revokeObjectURL(url) }
-    } catch (failure) {
-      if (run.current !== mine) return
-      stop()
-      setNote(failure?.message ?? t('Could not read this reply aloud'))
+  // Another chat is another conversation: it opens with its own baseline, unheard.
+  useEffect(() => {
+    run.current += 1
+    audio.current?.pause()
+    audio.current = null
+    setPlaying(false)
+    seen.current = { chat: '', token: '' }
+  }, [sessionId])
+  useEffect(() => {
+    if (!armed || sessionId === undefined) return undefined
+    let stopped = false
+    let busy = false
+    const play = async () => {
+      const mine = run.current + 1
+      run.current = mine
+      setPlaying(true)
+      setNote('')
+      let url
+      try {
+        url = URL.createObjectURL(await replyAudio(sessionId))
+        if (stopped || run.current !== mine) { URL.revokeObjectURL(url); return }
+        const next = new Audio(url)
+        audio.current = next
+        next.addEventListener('ended', () => {
+          URL.revokeObjectURL(url)
+          if (audio.current !== next) return
+          audio.current = null
+          setPlaying(false)
+        })
+        await next.play()
+        if (run.current !== mine) { next.pause(); URL.revokeObjectURL(url) }
+      } catch (failure) {
+        if (run.current !== mine) return
+        stop()
+        setNote(failure?.message ?? t('Could not read this reply aloud'))
+      }
     }
+    // The host names the newest reply; a different name than the one this chat opened
+    // with means the Bot has answered again.
+    const tick = async () => {
+      if (stopped || busy) return
+      busy = true
+      try {
+        const head = await call('read-aloud', { sessionId, peek: true })
+        if (stopped) return
+        const token = typeof head?.seq === 'number' ? `#${head.seq}` : String(head?.version ?? '')
+        if (seen.current.chat !== sessionId) { seen.current = { chat: sessionId, token }; return }
+        if (seen.current.token === token) return
+        seen.current = { chat: sessionId, token }
+        void play()
+      } catch {
+        // Nothing to read yet, or the host is busy: the next tick asks again.
+      } finally {
+        busy = false
+      }
+    }
+    void tick()
+    const timer = setInterval(tick, WATCH_MS)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [armed, sessionId])
+  const toggle = () => {
+    const next = !armed
+    rememberArmed(next)
+    setArmed(next)
+    if (!next) stop()
   }
   return h(Fragment, null,
     h('button', {
-      type: 'button', className: 'bt-mic', 'aria-label': playing ? t('Stop reading') : t('Read the last reply aloud'),
-      'aria-pressed': playing, title: playing ? t('Stop reading') : t('Read aloud'),
-      onMouseDown: keepComposerFocus, onClick: say,
+      type: 'button', className: 'bt-mic', 'data-armed': armed ? 'true' : undefined,
+      'data-playing': playing ? 'true' : undefined,
+      'aria-label': armed ? t('Stop reading') : t('Read aloud'), 'aria-pressed': armed,
+      title: armed ? t('Stop reading') : t('Read aloud'),
+      onMouseDown: keepComposerFocus, onClick: toggle,
     }, h(SpeakerIcon)),
     note ? h('span', { className: 'bt-mic-note', role: 'status' }, note) : null)
 }
