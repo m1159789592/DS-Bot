@@ -268,6 +268,7 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
   const [readerText, setReaderText] = useState<string | null>(null)
   const [readerTitle, setReaderTitle] = useState<string | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
+  const [savingNote, setSavingNote] = useState<string | null>(null)
   const [voiceError, setVoiceError] = useState<string | null>(null)
   const [prefs, setPrefs] = useState<Record<string, string>>({})
   useEffect(() => {
@@ -322,14 +323,21 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
       : { sessionId: targetSession, seq: file.seq, index: file.index }
     void (async () => {
       try {
-        const saved = await downloadFile(call, payload)
+        setSavingNote(t('Save'))
+        const saved = await downloadFile(call, payload, (done, size) => {
+          setSavingNote(size === undefined || size <= 0
+            ? t('Save')
+            : `${t('Save')} ${Math.min(99, Math.max(1, Math.round((done / size) * 100)))}%`)
+        })
         if (!(await Sharing.isAvailableAsync())) throw new Error(t('Saving to the device is not available on this phone'))
+        setSavingNote(null)
         await Sharing.shareAsync(saved.uri, { mimeType: saved.mime, dialogTitle: saved.name })
       } catch (failure) {
         const msg = (failure as { message?: string })?.message
         setFileError(msg ?? t('Could not save this file'))
       } finally {
         sharing.current = false
+        setSavingNote(null)
       }
     })()
   }, [call, sessionId])
@@ -565,6 +573,7 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
       {bot !== undefined ? <ComputerCards bot={bot} p={p} /> : null}
       {running && doingBot ? <ActionRow bot={doingBot} doing={doingText} p={p} dark={dark} /> : null}
       <Dock question={question} sessionId={sessionId} approvals={approvals} secrets={secrets} connectorRequests={connectorRequests} botName={bot?.name} onOpenConnector={connectorId => { if (connectorCanConnectOnMobile(connectorId)) navigation.navigate('Settings', { screen: 'Connectors', params: { focusId: connectorId }, initial: false }) }} btw={btw} handoff={browserHold} view={team?.views?.[sessionId]} call={call} p={p} expanded={expandedKey} onExpand={setExpandedKey} />
+      {savingNote ? <Text style={[type.small, { color: p.ink3, textAlign: 'center', marginBottom: 4 }]}>{savingNote}</Text> : null}
       {fileError ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4 }]} accessibilityRole="alert">{fileError}</Text> : null}
       {voiceError ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4, marginHorizontal: 16 }]} accessibilityRole="alert">{voiceError}</Text> : null}
       {page !== null && loadError !== null ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4, marginHorizontal: 16 }]} accessibilityRole="alert">{loadError}</Text> : null}

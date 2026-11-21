@@ -26,7 +26,7 @@ export async function collectAudio(call: Call, text: string, voice: Voice): Prom
   const pieces: Uint8Array[] = []
   let total = 0
   let truncated = false
-  for await (const part of fileChunks(call, { text, voice }, 'read-aloud')) {
+  for await (const part of fileChunks(call, { text, voice }, 'read-aloud', { lookahead: 3 })) {
     if (part.truncated === true) truncated = true
     pieces.push(part.data)
     total += part.data.length

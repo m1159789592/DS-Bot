@@ -39366,21 +39366,63 @@ function installHeaderNavigation(slots, face, component, priority) {
 }
 
 // src/shared/file-chunks.js
-async function* fileChunks(call2, target, endpoint = "file-download") {
-  let offset = 0;
-  let version;
-  for (; ; ) {
-    const part = await call2(endpoint, { ...target, offset, ...version === void 0 ? {} : { version } });
-    const bytes = Uint8Array.from(atob(part.bytes), (char) => char.charCodeAt(0));
-    if (part.nextOffset === void 0) {
-      yield { ...part, data: bytes };
-      return;
+async function* fileChunks(call2, target, endpoint = "file-download", options = {}) {
+  const lookahead = Math.max(1, Number(options.lookahead) || 1);
+  const report = options.onProgress;
+  const ask = (offset2, version2) => call2(endpoint, { ...target, offset: offset2, ...version2 === void 0 ? {} : { version: version2 } });
+  const decode = (part) => Uint8Array.from(atob(part.bytes), (char) => char.charCodeAt(0));
+  const stale = () => new Error("This file is no longer available");
+  const first = await ask(0);
+  const head = decode(first);
+  if (first.nextOffset === void 0) {
+    report?.(head.length, head.length);
+    yield { ...first, data: head };
+    return;
+  }
+  if (first.nextOffset !== head.length || first.done !== true && head.length === 0) throw stale();
+  const version = first.version;
+  const step = head.length;
+  const size = Number.isFinite(first.size) ? first.size : void 0;
+  report?.(first.nextOffset, size);
+  yield { ...first, data: head };
+  if (first.done === true) return;
+  const take = (part, offset2) => {
+    const bytes = decode(part);
+    if (part.version !== version) throw stale();
+    if (part.nextOffset !== offset2 + bytes.length || part.done !== true && bytes.length === 0) throw stale();
+    return { ...part, data: bytes };
+  };
+  if (size === void 0 || step === 0) {
+    let offset2 = first.nextOffset;
+    for (; ; ) {
+      const part = take(await ask(offset2, version), offset2);
+      report?.(part.nextOffset);
+      yield part;
+      if (part.done === true) return;
+      offset2 = part.nextOffset;
     }
-    if (part.nextOffset !== offset + bytes.length || part.done !== true && bytes.length === 0 || version !== void 0 && version !== part.version) throw new Error("This file is no longer available");
-    yield { ...part, data: bytes };
+  }
+  const queue = [];
+  for (let at = first.nextOffset; at < size; at += step) queue.push(at);
+  const running = /* @__PURE__ */ new Map();
+  const fill2 = () => {
+    while (running.size < lookahead && queue.length > 0) {
+      const at = queue.shift();
+      running.set(at, ask(at, version));
+    }
+  };
+  fill2();
+  let offset = first.nextOffset;
+  for (; ; ) {
+    const waiting = running.get(offset);
+    if (waiting === void 0) throw stale();
+    const part = take(await waiting, offset);
+    running.delete(offset);
+    fill2();
+    report?.(part.nextOffset, size);
+    yield part;
     if (part.done === true) return;
     offset = part.nextOffset;
-    version = part.version;
   }
 }
 
