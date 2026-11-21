@@ -7,7 +7,9 @@ import { HISTORY_TIMEOUT_MS, LONG_HEAD, MESSAGE_INLINE_MAX, READ_LINE_MAX, SOURC
 import { headOf, textOf } from './text.js'
 
 // A file larger than this is left to the Bot's own chat instead of being copied into a group.
-const DELIVERED_MAX_BYTES = 20 * 1024 * 1024
+// An installer is the common case that needs the room; the object store keeps one copy per
+// digest, so posting the same file again costs storage once.
+const DELIVERED_MAX_BYTES = 128 * 1024 * 1024
 
 export function install(rt) {
   const { ctx, state } = rt
@@ -207,7 +209,10 @@ export function install(rt) {
     for (const path of paths) {
       try {
         const data = await readFile(path)
-        if (data.length > DELIVERED_MAX_BYTES) continue
+        if (data.length > DELIVERED_MAX_BYTES) {
+          rt.warn('ds-bot: %s is too big to carry into the group post (%d bytes)', basename(path), data.length)
+          continue
+        }
         const file = await attachments.saveFile({ data, name: basename(path) })
         if (file !== undefined) kept.push(file)
       } catch (error) {
