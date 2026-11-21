@@ -24,6 +24,7 @@ import { Composer, type Photo } from './chat/composer.tsx'
 import { stageDocuments } from '../team/stage-file.ts'
 import type { PickedFile } from '../team/send-files.ts'
 import { Actions, Item, keysOf, PhotoViewer, PhotoViewerCtx, type ChatItem, type FileRef, type ImageRef } from './chat/items.tsx'
+import { highestSeq, newestReply } from './chat/spoken.ts'
 import { bumpMarkdownImageCache } from './chat/markdown.tsx'
 
 // Feed events refresh the chat as things happen; the poll only catches what a
@@ -279,24 +280,23 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
     setVoiceError(null)
     void speak(call, text, readVoice).catch((failure: { message?: string }) => setVoiceError(failure?.message ?? t('Could not read this reply aloud')))
   }, [call, readVoice])
-  // The newest finished reply is spoken once when it arrives. Opening a chat arms the
-  // reader instead of speaking its history, and a chat switch re-arms.
-  const spoken = useRef<{ chat: string; key: string | null }>({ chat: '', key: null })
+  // The newest finished reply is spoken once when it arrives. The chat opens with a
+  // baseline: only a reply newer than everything already in it is spoken, so opening a
+  // chat — or coming back to one — never reads its history out loud.
+  const spoken = useRef<{ chat: string; baseline: number }>({ chat: '', baseline: 0 })
   useEffect(() => {
     const items = page?.items ?? []
-    let last: ChatItem | undefined
-    for (let i = items.length - 1; i >= 0; i -= 1) {
-      const entry = items[i]
-      if ((entry.kind === 'bot' || entry.kind === 'post') && typeof entry.text === 'string' && entry.text.trim() !== '') { last = entry; break }
+    if (items.length === 0) return
+    const highest = highestSeq(items)
+    if (spoken.current.chat !== chatKey || spoken.current.baseline === 0) {
+      spoken.current = { chat: chatKey, baseline: highest }
+      return
     }
-    if (last === undefined) return
-    if (spoken.current.chat !== chatKey) spoken.current = { chat: chatKey, key: null }
-    const key = String(last.seq ?? last.id ?? last.text)
-    if (key === spoken.current.key) return
-    const arming = spoken.current.key === null
-    spoken.current.key = key
-    if (arming || prefs.readAloud !== 'on') return
-    readText(last.text ?? '')
+    const reply = newestReply(items)
+    if (reply === undefined || reply.seq <= spoken.current.baseline) return
+    spoken.current.baseline = highest
+    if (prefs.readAloud !== 'on') return
+    readText(reply.text)
   }, [page?.items, chatKey, prefs.readAloud, readText])
   // Leaving the chat stops the voice that belonged to it.
   useEffect(() => () => stopReading(), [chatKey])
