@@ -10,6 +10,11 @@ const MOBILE_SENSE = new Set(['New', 'Light', 'Back', 'Unknown'])
 
 const MOBILE_ZH: Record<string, string> = {
   'Add files': '添加文件',
+  'Read aloud': '朗读',
+  'Reading': '朗读',
+  'Read replies aloud': '自动朗读回复',
+  'Voice': '音色',
+  'Could not read this reply aloud': '这段回复朗读不了',
   '{name} is larger than 100 MB': '{name} 超过 100 MB',
   'Asks for the secret {name}': '请求密钥 {name}',
   '{bot} asks for the secret {name}': '{bot} 请求密钥 {name}',

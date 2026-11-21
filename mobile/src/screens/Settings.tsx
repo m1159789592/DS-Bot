@@ -61,7 +61,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 
 export function Settings({ navigation }: { navigation?: any }) {
   const { p } = useTheme()
-  const { team, computer } = useTeam()
+  const { team, computer, hello } = useTeam()
   const [prefs, setPrefs] = useState<Record<string, string>>({})
   const [, bump] = useState(0)
   const androidSdk = Platform.OS === 'android' ? Number(Platform.Version) : 0
@@ -100,6 +100,13 @@ export function Settings({ navigation }: { navigation?: any }) {
         <Row label={t('In-app banners')} end={<Switch value={prefs.banners !== 'off'} onValueChange={on => set('banners', on ? 'on' : 'off')} trackColor={{ false: p.line2, true: p.accent }} thumbColor={p.knob} />} />
         {Platform.OS === 'android' ? <Row label={t('Notifications')} value={notifStatus !== undefined ? t(notifStatus) : undefined} onPress={openNotifications} /> : null}
       </Section>
+      {hello?.capabilities?.includes('read-aloud') === true ? (
+        <Section label={t('Reading')}>
+          <Row label={t('Read replies aloud')} end={<Switch value={prefs.readAloud === 'on'} onValueChange={on => set('readAloud', on ? 'on' : 'off')} trackColor={{ false: p.line2, true: p.accent }} thumbColor={p.knob} />} />
+          <Choice label={t('Voice')} value={(prefs.readAloudVoice ?? 'stella') as 'stella' | 'tide'} onPick={next => set('readAloudVoice', next)}
+            options={[{ id: 'stella', label: t('Stella') }, { id: 'tide', label: t('Tide') }]} />
+        </Section>
+      ) : null}
       {/* The desktop settings pages, in the desktop's order. */}
       <Section label={t('Team')}>
         <Row label={t('Models')} onPress={() => navigation?.navigate('Providers')} />

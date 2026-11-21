@@ -503,7 +503,7 @@ function useOriginal(sessionId: string, ref: ImageRef | undefined): string | und
 
 // The bottom sheet a long-press opens: copy the source text or read it in a
 // selectable page. ChatView mounts one of each for the whole conversation.
-export function Actions({ visible, text, p, onClose, onSelect }: { visible: boolean; text: string; p: Palette; onClose: () => void; onSelect: () => void }) {
+export function Actions({ visible, text, p, onClose, onSelect, onSpeak }: { visible: boolean; text: string; p: Palette; onClose: () => void; onSelect: () => void; onSpeak?: () => void }) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.scrim} onPress={onClose}>
@@ -511,6 +511,11 @@ export function Actions({ visible, text, p, onClose, onSelect }: { visible: bool
           <Pressable accessibilityRole="button" onPress={async () => { await Clipboard.setStringAsync(text); onClose() }} style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: p.hover }]}>
             <Text style={[typeScale.settingsRow, { color: p.ink }]}>{t('Copy')}</Text>
           </Pressable>
+          {onSpeak !== undefined ? (
+            <Pressable accessibilityRole="button" onPress={() => { onSpeak(); onClose() }} style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: p.hover }]}>
+              <Text style={[typeScale.settingsRow, { color: p.ink }]}>{t('Read aloud')}</Text>
+            </Pressable>
+          ) : null}
           <Pressable accessibilityRole="button" onPress={onSelect} style={({ pressed }) => [styles.sheetRow, pressed && { backgroundColor: p.hover }]}>
             <Text style={[typeScale.settingsRow, { color: p.ink }]}>{t('Select text')}</Text>
           </Pressable>

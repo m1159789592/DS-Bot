@@ -4,6 +4,9 @@ import { useIsFocused, useNavigation } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Haptics from 'expo-haptics'
 import { downloadFile } from '../team/file-download.ts'
+import { speak, stopReading } from '../team/audio.ts'
+import type { Voice } from '../team/read-aloud.ts'
+import { onPrefsChange, readPrefs } from '../store.ts'
 import * as Sharing from 'expo-sharing'
 import type { Approval, Bot, Question, Room } from '../connection.ts'
 import { createChatCache } from '../team/chat-cache.ts'
@@ -264,6 +267,39 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
   const [readerText, setReaderText] = useState<string | null>(null)
   const [readerTitle, setReaderTitle] = useState<string | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
+  const [voiceError, setVoiceError] = useState<string | null>(null)
+  const [prefs, setPrefs] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const load = () => { void readPrefs().then(setPrefs) }
+    load()
+    return onPrefsChange(load)
+  }, [])
+  const readVoice: Voice = prefs.readAloudVoice === 'tide' ? 'tide' : 'stella'
+  const readText = useCallback((text: string) => {
+    setVoiceError(null)
+    void speak(call, text, readVoice).catch((failure: { message?: string }) => setVoiceError(failure?.message ?? t('Could not read this reply aloud')))
+  }, [call, readVoice])
+  // The newest finished reply is spoken once when it arrives. Opening a chat arms the
+  // reader instead of speaking its history, and a chat switch re-arms.
+  const spoken = useRef<{ chat: string; key: string | null }>({ chat: '', key: null })
+  useEffect(() => {
+    const items = page?.items ?? []
+    let last: ChatItem | undefined
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const entry = items[i]
+      if ((entry.kind === 'bot' || entry.kind === 'post') && typeof entry.text === 'string' && entry.text.trim() !== '') { last = entry; break }
+    }
+    if (last === undefined) return
+    if (spoken.current.chat !== chatKey) spoken.current = { chat: chatKey, key: null }
+    const key = String(last.seq ?? last.id ?? last.text)
+    if (key === spoken.current.key) return
+    const arming = spoken.current.key === null
+    spoken.current.key = key
+    if (arming || prefs.readAloud !== 'on') return
+    readText(last.text ?? '')
+  }, [page?.items, chatKey, prefs.readAloud, readText])
+  // Leaving the chat stops the voice that belonged to it.
+  useEffect(() => () => stopReading(), [chatKey])
   const [photos, setPhotos] = useState<{ sessionId: string; refs: ImageRef[]; index: number } | null>(null)
   // Save hands the file to the phone: the host sends its bytes, the app writes them
   // to a cache file, and the system share sheet lets Android put it in Downloads or
@@ -515,10 +551,12 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
       {running && doingBot ? <ActionRow bot={doingBot} doing={doingText} p={p} dark={dark} /> : null}
       <Dock question={question} sessionId={sessionId} approvals={approvals} secrets={secrets} connectorRequests={connectorRequests} botName={bot?.name} onOpenConnector={connectorId => { if (connectorCanConnectOnMobile(connectorId)) navigation.navigate('Settings', { screen: 'Connectors', params: { focusId: connectorId }, initial: false }) }} btw={btw} handoff={browserHold} view={team?.views?.[sessionId]} call={call} p={p} expanded={expandedKey} onExpand={setExpandedKey} />
       {fileError ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4 }]} accessibilityRole="alert">{fileError}</Text> : null}
+      {voiceError ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4, marginHorizontal: 16 }]} accessibilityRole="alert">{voiceError}</Text> : null}
       {page !== null && loadError !== null ? <Text style={[type.small, { color: p.danger, textAlign: 'center', marginBottom: 4, marginHorizontal: 16 }]} accessibilityRole="alert">{loadError}</Text> : null}
       <Composer name={bot?.name ?? room?.name ?? ''} running={running} canStop={canStop} canAttach={hello?.capabilities?.includes('send-images') === true} canAttachFiles={hello?.capabilities?.includes('send-files') === true} onSend={send} onStop={stop} p={p} />
       <Actions visible={menuText !== null} text={menuText ?? ''} p={p}
         onClose={() => setMenuText(null)}
+        onSpeak={hello?.capabilities?.includes('read-aloud') === true ? () => readText(menuText ?? '') : undefined}
         onSelect={() => { setReaderTitle(null); setReaderText(menuText); setMenuText(null) }} />
       <Modal visible={readerText !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setReaderText(null)}>
         <View style={[styles.reader, { backgroundColor: p.main }]}>
