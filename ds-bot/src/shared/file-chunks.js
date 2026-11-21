@@ -2,12 +2,13 @@
 /**
  * @param {(endpoint: string, payload: object) => Promise<any>} call
  * @param {object} target
+ * @param {string} [endpoint] another endpoint answering in the same chunks, such as `read-aloud`
  */
-export async function* fileChunks(call, target) {
+export async function* fileChunks(call, target, endpoint = 'file-download') {
   let offset = 0
   let version
   for (;;) {
-    const part = await call('file-download', { ...target, offset, ...(version === undefined ? {} : { version }) })
+    const part = await call(endpoint, { ...target, offset, ...(version === undefined ? {} : { version }) })
     const bytes = Uint8Array.from(atob(part.bytes), char => char.charCodeAt(0))
     // Older hosts return one whole file without chunk metadata.
     if (part.nextOffset === undefined) { yield { ...part, data: bytes }; return }

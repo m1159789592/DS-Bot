@@ -51,6 +51,7 @@ export const CAPABILITIES = [
   'markdown-image',
   'file-download-chunks',
   'write-state',
+  'read-aloud',
 ]
 export const NOTICE_KINDS = ['message', 'group', 'done', 'question', 'view', 'approval']
 
@@ -648,6 +649,7 @@ export function install(rt) {
       case 'image': return image(body)
       case 'file-download': return fileDownload(body)
       case 'markdown-image': return markdownImage(body)
+      case 'read-aloud': return rt.readAloud(body)
       case 'usage-summary': return usageSummary(body)
       case 'memory-edit': return rt.memoryEdit({ ...memoryTarget(body), scope: body.scope, topic: body.topic, text: body.text, next: body.next })
       case 'memory-add': return rt.memoryAdd({ ...memoryTarget(body), scope: body.scope, topic: body.topic, text: body.text })

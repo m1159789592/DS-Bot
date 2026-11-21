@@ -39165,11 +39165,11 @@ function installHeaderNavigation(slots, face, component, priority) {
 }
 
 // src/shared/file-chunks.js
-async function* fileChunks(call2, target) {
+async function* fileChunks(call2, target, endpoint = "file-download") {
   let offset = 0;
   let version;
   for (; ; ) {
-    const part = await call2("file-download", { ...target, offset, ...version === void 0 ? {} : { version } });
+    const part = await call2(endpoint, { ...target, offset, ...version === void 0 ? {} : { version } });
     const bytes = Uint8Array.from(atob(part.bytes), (char) => char.charCodeAt(0));
     if (part.nextOffset === void 0) {
       yield { ...part, data: bytes };
