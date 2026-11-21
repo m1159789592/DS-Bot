@@ -38420,7 +38420,9 @@ function ComposerReadAloud({ sessionId }) {
   const [playing, setPlaying] = (0, import_react55.useState)(false);
   const [note, setNote] = (0, import_react55.useState)("");
   const audio = (0, import_react55.useRef)(null);
+  const run2 = (0, import_react55.useRef)(0);
   (0, import_react55.useEffect)(() => () => {
+    run2.current += 1;
     audio.current?.pause();
     audio.current = null;
   }, []);
@@ -38430,6 +38432,7 @@ function ComposerReadAloud({ sessionId }) {
     return () => clearTimeout(timer);
   }, [note]);
   const stop = () => {
+    run2.current += 1;
     audio.current?.pause();
     audio.current = null;
     setPlaying(false);
@@ -38440,10 +38443,17 @@ function ComposerReadAloud({ sessionId }) {
       return;
     }
     if (sessionId === void 0) return;
+    const mine = run2.current + 1;
+    run2.current = mine;
     setPlaying(true);
     setNote("");
+    let url;
     try {
-      const url = URL.createObjectURL(await replyAudio(sessionId));
+      url = URL.createObjectURL(await replyAudio(sessionId));
+      if (run2.current !== mine) {
+        URL.revokeObjectURL(url);
+        return;
+      }
       const next = new Audio(url);
       audio.current = next;
       next.addEventListener("ended", () => {
@@ -38453,7 +38463,12 @@ function ComposerReadAloud({ sessionId }) {
         setPlaying(false);
       });
       await next.play();
+      if (run2.current !== mine) {
+        next.pause();
+        URL.revokeObjectURL(url);
+      }
     } catch (failure) {
+      if (run2.current !== mine) return;
       stop();
       setNote(failure?.message ?? t("Could not read this reply aloud"));
     }

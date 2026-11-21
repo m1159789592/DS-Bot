@@ -126,21 +126,37 @@ export function ComposerReadAloud({ sessionId }) {
   const [playing, setPlaying] = useState(false)
   const [note, setNote] = useState('')
   const audio = useRef(null)
-  useEffect(() => () => { audio.current?.pause(); audio.current = null }, [])
+  // Making the voice takes a moment. A stop in that moment must keep it quiet, so every
+  // play takes a number and a play that lost it says nothing.
+  const run = useRef(0)
+  useEffect(() => () => {
+    run.current += 1
+    audio.current?.pause()
+    audio.current = null
+  }, [])
   useEffect(() => {
     if (!note) return undefined
     const timer = setTimeout(() => setNote(''), 2600)
     return () => clearTimeout(timer)
   }, [note])
-  const stop = () => { audio.current?.pause(); audio.current = null; setPlaying(false) }
+  const stop = () => {
+    run.current += 1
+    audio.current?.pause()
+    audio.current = null
+    setPlaying(false)
+  }
   const say = async () => {
     // The same button stops what it started.
     if (playing) { stop(); return }
     if (sessionId === undefined) return
+    const mine = run.current + 1
+    run.current = mine
     setPlaying(true)
     setNote('')
+    let url
     try {
-      const url = URL.createObjectURL(await replyAudio(sessionId))
+      url = URL.createObjectURL(await replyAudio(sessionId))
+      if (run.current !== mine) { URL.revokeObjectURL(url); return }
       const next = new Audio(url)
       audio.current = next
       next.addEventListener('ended', () => {
@@ -150,7 +166,9 @@ export function ComposerReadAloud({ sessionId }) {
         setPlaying(false)
       })
       await next.play()
+      if (run.current !== mine) { next.pause(); URL.revokeObjectURL(url) }
     } catch (failure) {
+      if (run.current !== mine) return
       stop()
       setNote(failure?.message ?? t('Could not read this reply aloud'))
     }
