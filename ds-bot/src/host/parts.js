@@ -1841,10 +1841,17 @@ export function install(rt) {
   // cards as the Bot's own chat.
   async function deliveredFiles(sessionId, turn) {
     if (typeof sessionId !== 'string' || sessionId === '' || !Number.isInteger(turn)) return []
-    const page = await ctx.sessionController.page(
-      { address: { kind: 'session', sessionId }, maxMessages: 80 },
-      AbortSignal.timeout(HISTORY_TIMEOUT_MS),
-    )
+    // The cards are a nicety on top of the post: a Session that cannot be read
+    // (absent history, a timeout) drops them instead of failing the post.
+    const page = await Promise.resolve()
+      .then(() =>
+        ctx.sessionController.page(
+          { address: { kind: 'session', sessionId }, maxMessages: 80 },
+          AbortSignal.timeout(HISTORY_TIMEOUT_MS),
+        ),
+      )
+      .catch(() => undefined)
+    if (page === undefined) return []
     const paths = []
     for (const record of page.records) {
       const event = record.event
