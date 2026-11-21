@@ -319,9 +319,13 @@ export function ChatView({ bot, room, header, onMissing }: { bot?: Bot; room?: R
     sharing.current = true
     setFileError(null)
     const targetSession = file.sessionId ?? sessionId
-    const payload = file.attachmentId !== undefined
-      ? { sessionId: targetSession, attachmentId: file.attachmentId }
-      : { sessionId: targetSession, seq: file.seq, index: file.index }
+    // A card of a group row names the row in the group's book; one of a post names the
+    // Session the file came in.
+    const payload = file.roomId !== undefined
+      ? { roomId: file.roomId, rowSeq: file.seq, index: file.index }
+      : file.attachmentId !== undefined
+        ? { sessionId: targetSession, attachmentId: file.attachmentId }
+        : { sessionId: targetSession, seq: file.seq, index: file.index }
     void (async () => {
       try {
         setSavingNote(t('Save'))

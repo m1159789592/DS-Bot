@@ -1,5 +1,6 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { fileChunks } from '../shared/file-chunks.js'
 import { MarkdownText, writeClipboard } from './dsh-primitives.js'
 import { inkText } from './inks.js'
 import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, stripToolCallTags, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts, elapsedLabel, clockLabel, messageClock } from './text.js'
@@ -395,7 +396,50 @@ export function claimLines(claims) {
   return lines
 }
 
-export function GroupMessage({ bot, text, texts = [text], room, sessionId, roster, actions, msgKey, useUi, whole, time, duration, claims, changes }) {
+// A size is read in the unit a person keeps a file in.
+const sizeLabel = bytes => !Number.isFinite(bytes) ? ''
+  : bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB`
+      : `${bytes} B`
+
+// The documents a group post carried: one card per file, saved through the same pieces the
+// phone takes a file in. A card of a post's own document names the Session it came in; one
+// of a row names the row in the group's book.
+function GroupFiles({ files, sessionId }) {
+  const [busy, setBusy] = useState(-1)
+  const [error, setError] = useState(null)
+  if (!Array.isArray(files) || files.length === 0) return null
+  const save = (file, index) => {
+    setBusy(index)
+    setError(null)
+    const target = typeof file.roomId === 'string'
+      ? { roomId: file.roomId, rowSeq: file.seq, index: Number.isInteger(file.index) ? file.index : index }
+      : { sessionId: file.sessionId ?? sessionId, attachmentId: file.attachmentId }
+    void (async () => {
+      const pieces = []
+      let last
+      for await (const piece of fileChunks(call, target)) {
+        pieces.push(piece.data)
+        last = piece
+      }
+      const url = URL.createObjectURL(new Blob(pieces, { type: last?.mime ?? 'application/octet-stream' }))
+      const link = Object.assign(document.createElement('a'), { href: url, download: last?.name ?? file.name ?? 'file' })
+      document.body.append(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    })().catch(failure => setError(failure?.message ?? t('Could not save this file'))).finally(() => setBusy(-1))
+  }
+  return h('div', { className: 'bt-group-files' },
+    files.map((file, index) => h('div', { key: `${file.attachmentId ?? file.name}-${index}`, className: 'bt-group-file' },
+      h('span', { className: 'bt-group-file-name', title: file.name }, file.name ?? ''),
+      Number.isFinite(file.bytes) ? h('span', { className: 'bt-group-file-size' }, sizeLabel(file.bytes)) : null,
+      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy === index, onClick: () => save(file, index) },
+        busy === index ? t('Saving…') : t('Save')))),
+    error === null ? null : h('span', { className: 'bt-set-hint', role: 'alert' }, error))
+}
+
+export function GroupMessage({ bot, text, texts = [text], room, sessionId, roster, actions, msgKey, useUi, whole, time, duration, claims, changes, files }) {
   const ref = useRef(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -418,6 +462,7 @@ export function GroupMessage({ bot, text, texts = [text], room, sessionId, roste
       Number.isFinite(time) ? h('span', { className: 'bt-group-time', title: clockLabel(time) }, messageClock(time)) : null,
       took ? h('span', { className: 'bt-group-took', title: t('Ran for {duration}', { duration: took }) }, took) : null),
     h(Bubbles, { texts, roster, selfId: bot.id, actions, sessionId: quoteSession, msgKey, useUi, lead: flat ? null : lead, whole, textInteractionSource: true }),
+    files === undefined ? null : h(GroupFiles, { files, sessionId: quoteSession }),
     changes === undefined ? null : h(ChangesCard, { changes, actions }),
     claimLines(claims).map(line => h('div', { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: 'status', title: line.detail ?? undefined }, line.text)))
 }
@@ -729,12 +774,17 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
         // A post past what a message holds came as a file, with its start only.
         const file = source.length === undefined ? undefined : (data.content ?? []).find(block => block?.type === 'file')?.attachment
+        // A post that carried documents keeps them as cards, like the phone shows them.
+        const attached = (data.content ?? [])
+          .filter(block => block?.type === 'file' && block.attachment !== undefined)
+          .map(block => ({ ...block.attachment, sessionId }))
         const text = stripHeader(contentText(data.content))
         // A trigger's data carries no turn; its event seq is the one durable name of this post.
         return h(GroupMessage, {
           bot: poster, text: file ? stripLongNote(text) : text, room, sessionId, roster, actions, msgKey: `${sessionId}:post:${data.seq ?? node.key}`, useUi, time: data.time,
           claims: source.claims,
           changes: source.changes,
+          files: attached.length > 0 ? attached : undefined,
           whole: file ? { length: source.length, load: () => actions.fileText(file) } : undefined,
         })
       }
@@ -1106,7 +1156,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
         return h('div', { key: `goal-${index}`, className: 'bt-event', title: reply.text || undefined },
           h('span', { className: 'bt-event-ico', 'aria-hidden': true }, h(GoalIcon)), goalEventText(reply))
       }
-      return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, sessionId, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi, time, duration, claims, changes })
+      return h(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts, room, sessionId, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : undefined, useUi, time, duration, claims, changes, files: reply.files })
     }),
     pending.map((id, at) => {
       const bot = roster.byId[id]

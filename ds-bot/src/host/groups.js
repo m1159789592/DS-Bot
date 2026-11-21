@@ -297,6 +297,11 @@ export function install(rt) {
 
   // What the group chat draws of a record, in the shape of a reply of the round.
   function rowOf(record) {
+    const row = rowBase(record)
+    // The documents a post carried travel with its row: the group draws them as cards.
+    return row === undefined ? undefined : { ...row, seq: record.seq, ...(record.files === undefined ? {} : { files: record.files }) }
+  }
+  function rowBase(record) {
     // A notice names the member it is about, not as its speaker: members skip their own lines.
     const botId = record.botId ?? record.about
     const bot = botId === undefined ? undefined : rt.botOf(botId)
@@ -340,7 +345,15 @@ export function install(rt) {
       if (next.length > 0) end = Math.min(...next) - 1
     }
     // Not the messages the group's own Session shows itself.
-    const rows = rt.ledger.range(bookOf(roomId), from, end).filter(record => record.session !== true).map(rowOf).filter(Boolean)
+    const rows = rt.ledger.range(bookOf(roomId), from, end)
+      .filter(record => record.session !== true)
+      .map((record) => {
+        const row = rowOf(record)
+        if (row?.files === undefined) return row
+        // A card names where its bytes come from: the row in the group's book.
+        return { ...row, files: row.files.map((file, index) => ({ ...file, roomId, seq: record.seq, index })) }
+      })
+      .filter(Boolean)
     return { rows, open: end === undefined }
   }
   const groupRows = (roomId, from, to, anchor) => rowsView(roomId, from, to, anchor).rows
@@ -718,8 +731,8 @@ export function install(rt) {
   }
 
   // A member's message in the round, for the members after it and the user.
-  const postInRound = (room, member, text, duration, claims, changes) => {
-    say(room, { who: member.name, botId: member.id, text, ...(duration === undefined ? {} : { duration }), ...(claims === undefined ? {} : { claims }), ...(changes === undefined ? {} : { changes }) })
+  const postInRound = (room, member, text, duration, claims, changes, files) => {
+    say(room, { who: member.name, botId: member.id, text, ...(duration === undefined ? {} : { duration }), ...(claims === undefined ? {} : { claims }), ...(changes === undefined ? {} : { changes }), ...(files === undefined || files.length === 0 ? {} : { files }) })
     void rt.save().catch(() => {})
     return room.seq
   }
@@ -1136,6 +1149,9 @@ export function install(rt) {
     const final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
     // Tool-only turns can finish without assistant text; their changes still belong here.
     const changes = await rt.turnChanges?.(session.id)
+    // A turn that ended here hands over the files it presented; one that goes on working
+    // posts them with its late result instead.
+    const presented = typeof reply === 'string' ? await rt.takePresentedFiles?.(session.id) ?? [] : []
     const subRunning = rt.hasSubagents?.(session.id) === true
     if (reply?.failure !== undefined) {
       // Not a pass: the user sees why the member is silent, and the round goes on.
@@ -1152,7 +1168,7 @@ export function install(rt) {
       say(room, { who: member.name, botId: member.id, kind: 'working' })
     } else if (subRunning) {
       if (final !== undefined) {
-        postInRound(room, member, final, Date.now() - startedAt, claimsOf(session, final, true), changes)
+        postInRound(room, member, final, Date.now() - startedAt, claimsOf(session, final, true), changes, presented)
         callFrom(room, round, member, final, called, { worked: true, byBot: answeredBot })
       }
       slot.status = 'working'
@@ -1160,24 +1176,24 @@ export function install(rt) {
       say(room, { who: member.name, botId: member.id, kind: 'working' })
     } else if (changes !== undefined && final === undefined && typeof reply === 'string') {
       slot.status = 'posted'
-      say(room, { who: member.name, botId: member.id, kind: 'done', text: '', changes })
+      say(room, { who: member.name, botId: member.id, kind: 'done', text: '', changes, ...(presented.length === 0 ? {} : { files: presented }) })
       posted.push(room.seq)
     } else if (final !== undefined || (typeof reply === 'string' && said.length > 0)) {
       slot.status = 'posted'
       if (final !== undefined && final.trim() !== '') {
-        posted.push(postInRound(room, member, final, Date.now() - startedAt, claimsOf(session, final, worked, callsIn(room, member, final)), changes))
+        posted.push(postInRound(room, member, final, Date.now() - startedAt, claimsOf(session, final, worked, callsIn(room, member, final)), changes, presented))
         callFrom(room, round, member, final, called, { worked, byBot: answeredBot })
-      } else if (changes !== undefined) {
+      } else if (changes !== undefined || presented.length > 0) {
         // The turn wrote nothing to hang the change line on (a pass, or an empty final
         // reply): its completion line carries it, the same place a late completion does.
-        say(room, { who: member.name, botId: member.id, kind: 'done', text: '', changes })
+        say(room, { who: member.name, botId: member.id, kind: 'done', text: '', ...(changes === undefined ? {} : { changes }), ...(presented.length === 0 ? {} : { files: presented }) })
       }
     } else {
       slot.status = reply === null ? 'cancelled' : typeof reply === 'string' ? 'passed' : 'missed'
       round.passed.push(member.name)
       // A pass that changed files has a review to open even without a word: its
       // completion line carries the change line, exactly like a late completion.
-      if (changes !== undefined) say(room, { who: member.name, botId: member.id, kind: 'done', text: '', changes })
+      if (changes !== undefined || presented.length > 0) say(room, { who: member.name, botId: member.id, kind: 'done', text: '', ...(changes === undefined ? {} : { changes }), ...(presented.length === 0 ? {} : { files: presented }) })
       if (reply?.missed) {
         // The round moved on without this member: the log shows the call and then
         // silence, which reads as a lost message. The group is told the baton was
@@ -1706,7 +1722,7 @@ export function install(rt) {
         running.failed.push(sender.name)
       } else if (extra.resumed === true || extra.stopped === true || extra.done === true) {
         const kind = extra.done === true ? 'done' : extra.stopped === true ? 'stopped' : extra.again === true ? 'cut' : 'resumed'
-        say(room, { who: sender.name, botId: sender.id, kind, text: '', ...(extra.changes === undefined ? {} : { changes: extra.changes }) })
+        say(room, { who: sender.name, botId: sender.id, kind, text: '', ...(extra.changes === undefined ? {} : { changes: extra.changes }), ...(files.length === 0 ? {} : { files }) })
       } else {
         const line = [text, ...files.map(fileLine)].filter(Boolean).join('\n')
         say(room, { who: sender.name, botId: sender.id, text: line, ...(files.length > 0 ? { files } : {}), ...(extra.claims === undefined ? {} : { claims: extra.claims }), ...(extra.changes === undefined ? {} : { changes: extra.changes }) })
@@ -1773,8 +1789,10 @@ export function install(rt) {
     // What this turn changed in the member's folder, so the group can open the review from
     // the same row. Read before posting: the review needs the turn that just ended.
     const changes = await rt.turnChanges?.(sessionId)
+    // The files this turn presented, carried into the post its result makes.
+    const presented = await rt.takePresentedFiles?.(sessionId) ?? []
     const moved = extra => (changes === undefined ? extra : { ...extra, changes })
-    const post = (body, extra) => postToRoom(room, member, body, { late: true, ...moved(extra), ...inBatch, ...(claims === undefined ? {} : { claims }) })
+    const post = (body, extra, attach = []) => postToRoom(room, member, body, { late: true, ...moved(extra), ...inBatch, ...(claims === undefined ? {} : { claims }) }, attach)
       .catch((error) => {
         if (batch !== undefined) closeBatch(batch.key)
         rt.warn('ds-bot: late group reply from %s failed: %s', member.name, error)
@@ -1783,22 +1801,22 @@ export function install(rt) {
     // text carries the change line; when it wrote none, its completion line does. This
     // line stays out of `inBatch`: the batching and closeBatch behaviour below is not
     // changed by it, and a late pass that changed nothing still posts nothing.
-    const lateDone = (extra = {}) => postToRoom(room, member, '', { late: true, done: true, ...moved(extra), ...(askedBy ? { askedBy } : {}) })
+    const lateDone = (extra = {}, attach = []) => postToRoom(room, member, '', { late: true, done: true, ...moved(extra), ...(askedBy ? { askedBy } : {}) }, attach)
       .catch(error => rt.warn('ds-bot: late completion from %s failed: %s', member.name, error))
     if (waitingPeers && named.length === 0) {
-      if (!isPass(text)) await post(text, { quiet: true })
+      if (!isPass(text)) await post(text, { quiet: true }, presented)
       // `quiet` keeps the change line from waking the caller early: a done post without it
       // is routed straight to `askedBy`, and the batch end wakes it again.
-      else if (changes !== undefined) await lateDone({ quiet: true })
+      else if (changes !== undefined || presented.length > 0) await lateDone({ quiet: true }, presented)
       return
     }
     const done = isPass(text) && (shown || batchDoneBefore) && askedBy !== undefined
     if (isPass(text) && !done) {
       if (batch !== undefined) closeBatch(batch.key)
-      if (changes !== undefined) await lateDone()
+      if (changes !== undefined || presented.length > 0) await lateDone({}, presented)
       return
     }
-    await post(done ? '' : text, { ...(done ? { done: true } : {}), ...(askedBy ? { askedBy } : {}) })
+    await post(done ? '' : text, { ...(done ? { done: true } : {}), ...(askedBy ? { askedBy } : {}) }, presented)
   }
   rt.lateRoomReply = lateRoomReply
 

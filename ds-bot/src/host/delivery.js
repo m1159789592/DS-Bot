@@ -241,6 +241,36 @@ export function install(rt) {
     return { text, whole: true }
   }
 
+  // The files a turn presented, kept only until the post that carries the turn's answer in
+  // a group takes them: a member's result then shows the same cards its own chat does.
+  const presented = new Map()
+  ctx.on('session/event', (session, event) => {
+    if (event?.type === 'turn/start') {
+      presented.delete(session.id)
+      return
+    }
+    if (event?.type !== 'deliverables/presented') return
+    const turn = event.data?.turn
+    if (!Number.isInteger(turn)) return
+    const paths = (Array.isArray(event.data?.files) ? event.data.files : [])
+      .map(file => file?.path)
+      .filter(path => typeof path === 'string' && path !== '')
+    if (paths.length === 0) return
+    const kept = presented.get(session.id)
+    const entry = kept?.turn === turn ? kept : { turn, paths: [] }
+    for (const path of paths) if (!entry.paths.includes(path)) entry.paths.push(path)
+    presented.set(session.id, entry)
+  })
+
+  // What the Session's last turn presented, as the files a group post carries. Once: the
+  // post that takes them is the one they answer.
+  async function takePresentedFiles(sessionId) {
+    const entry = presented.get(sessionId)
+    if (entry === undefined) return []
+    presented.delete(sessionId)
+    return await attachDelivered(entry.paths)
+  }
+
   const exchangesOf = (a, b) => pairMessages(a, b).map((record) => {
     const kept = headOf(record.text ?? '', TEXT_KEPT)
     const { delivered: _delivered, ...rest } = record
@@ -254,5 +284,5 @@ export function install(rt) {
     return { ...record, ledger: true }
   }
 
-  Object.assign(rt, { resolveAgent, deliver, exchangeText, attachLong, attachDelivered, fileText, exchangesOf, exchangeOf })
+  Object.assign(rt, { resolveAgent, deliver, exchangeText, attachLong, attachDelivered, takePresentedFiles, fileText, exchangesOf, exchangeOf })
 }

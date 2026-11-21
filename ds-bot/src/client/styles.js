@@ -240,6 +240,10 @@ body{--bt-qr-paper:#fff;--bt-qr-ink:#000}
 .bt-bubble a[href^="${MENTION_ORIGIN}"]::before{content:"";display:inline-block;width:16px;height:16px;margin-right:3px;vertical-align:-3px;background:currentColor;-webkit-mask:${DEFAULT_MASK} center/contain no-repeat;mask:${DEFAULT_MASK} center/contain no-repeat}
 .bt-group-msg{display:flex;flex-direction:column;gap:4px;margin:16px 0 0}
 .bt-group-msg:first-child{margin-top:0}
+.bt-group-files{display:flex;flex-direction:column;gap:6px;margin-top:2px}
+.bt-group-file{display:flex;align-items:center;gap:8px;max-width:520px;border:1px solid var(--bt-line);border-radius:10px;padding:6px 10px;background:var(--bt-card)}
+.bt-group-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;font-weight:500;color:var(--bt-ink)}
+.bt-group-file-size{flex:none;font-size:11.5px;color:var(--bt-ink-3)}
 .bt-group-msg[data-chain-prev]{margin-top:4px}
 .bt-group-msg[data-chain-prev]>.bt-group-name{display:none}
 body:not([data-bt-layout=flat]) .bt-group-msg[data-chain-next] .bt-lead{visibility:hidden}

@@ -16145,6 +16145,10 @@ body{--bt-qr-paper:#fff;--bt-qr-ink:#000}
 .bt-bubble a[href^="${MENTION_ORIGIN}"]::before{content:"";display:inline-block;width:16px;height:16px;margin-right:3px;vertical-align:-3px;background:currentColor;-webkit-mask:${DEFAULT_MASK} center/contain no-repeat;mask:${DEFAULT_MASK} center/contain no-repeat}
 .bt-group-msg{display:flex;flex-direction:column;gap:4px;margin:16px 0 0}
 .bt-group-msg:first-child{margin-top:0}
+.bt-group-files{display:flex;flex-direction:column;gap:6px;margin-top:2px}
+.bt-group-file{display:flex;align-items:center;gap:8px;max-width:520px;border:1px solid var(--bt-line);border-radius:10px;padding:6px 10px;background:var(--bt-card)}
+.bt-group-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;font-weight:500;color:var(--bt-ink)}
+.bt-group-file-size{flex:none;font-size:11.5px;color:var(--bt-ink-3)}
 .bt-group-msg[data-chain-prev]{margin-top:4px}
 .bt-group-msg[data-chain-prev]>.bt-group-name{display:none}
 body:not([data-bt-layout=flat]) .bt-group-msg[data-chain-next] .bt-lead{visibility:hidden}
@@ -18053,6 +18057,67 @@ function AgentBadge({ engine, size = 15 }) {
     (0, import_react4.createElement)("rect", { x: 1, y: 1, width: 18, height: 18, rx: 5, fill: "currentColor", fillOpacity: 0.16, stroke: "currentColor", strokeWidth: 1.4 }),
     (0, import_react4.createElement)("text", { x: 10, y: 13.6, textAnchor: "middle", fontSize: 7.5, fontWeight: 700, fill: "currentColor" }, glyph)
   );
+}
+
+// src/shared/file-chunks.js
+async function* fileChunks(call2, target, endpoint = "file-download", options = {}) {
+  const lookahead = Math.max(1, Number(options.lookahead) || 1);
+  const report = options.onProgress;
+  const ask = (offset2, version2) => call2(endpoint, { ...target, offset: offset2, ...version2 === void 0 ? {} : { version: version2 } });
+  const decode = (part) => Uint8Array.from(atob(part.bytes), (char) => char.charCodeAt(0));
+  const stale = () => new Error("This file is no longer available");
+  const first = await ask(0);
+  const head = decode(first);
+  if (first.nextOffset === void 0) {
+    report?.(head.length, head.length);
+    yield { ...first, data: head };
+    return;
+  }
+  if (first.nextOffset !== head.length || first.done !== true && head.length === 0) throw stale();
+  const version = first.version;
+  const step = head.length;
+  const size = Number.isFinite(first.size) ? first.size : void 0;
+  report?.(first.nextOffset, size);
+  yield { ...first, data: head };
+  if (first.done === true) return;
+  const take = (part, offset2) => {
+    const bytes = decode(part);
+    if (part.version !== version) throw stale();
+    if (part.nextOffset !== offset2 + bytes.length || part.done !== true && bytes.length === 0) throw stale();
+    return { ...part, data: bytes };
+  };
+  if (size === void 0 || step === 0) {
+    let offset2 = first.nextOffset;
+    for (; ; ) {
+      const part = take(await ask(offset2, version), offset2);
+      report?.(part.nextOffset);
+      yield part;
+      if (part.done === true) return;
+      offset2 = part.nextOffset;
+    }
+  }
+  const queue = [];
+  for (let at = first.nextOffset; at < size; at += step) queue.push(at);
+  const running = /* @__PURE__ */ new Map();
+  const fill2 = () => {
+    while (running.size < lookahead && queue.length > 0) {
+      const at = queue.shift();
+      running.set(at, ask(at, version));
+    }
+  };
+  fill2();
+  let offset = first.nextOffset;
+  for (; ; ) {
+    const waiting = running.get(offset);
+    if (waiting === void 0) throw stale();
+    const part = take(await waiting, offset);
+    running.delete(offset);
+    fill2();
+    report?.(part.nextOffset, size);
+    yield part;
+    if (part.done === true) return;
+    offset = part.nextOffset;
+  }
 }
 
 // src/client/changes-card.js
@@ -28472,7 +28537,48 @@ function claimLines(claims) {
   for (const path2 of claims.missingFiles ?? []) lines.push({ kind: "file", text: t("File not found: {path}", { path: path2 }) });
   return lines;
 }
-function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionId, roster, actions, msgKey, useUi, whole, time, duration, claims, changes }) {
+var sizeLabel = (bytes) => !Number.isFinite(bytes) ? "" : bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
+function GroupFiles({ files, sessionId }) {
+  const [busy, setBusy] = (0, import_react34.useState)(-1);
+  const [error, setError] = (0, import_react34.useState)(null);
+  if (!Array.isArray(files) || files.length === 0) return null;
+  const save = (file, index) => {
+    setBusy(index);
+    setError(null);
+    const target = typeof file.roomId === "string" ? { roomId: file.roomId, rowSeq: file.seq, index: Number.isInteger(file.index) ? file.index : index } : { sessionId: file.sessionId ?? sessionId, attachmentId: file.attachmentId };
+    void (async () => {
+      const pieces = [];
+      let last;
+      for await (const piece of fileChunks(call, target)) {
+        pieces.push(piece.data);
+        last = piece;
+      }
+      const url = URL.createObjectURL(new Blob(pieces, { type: last?.mime ?? "application/octet-stream" }));
+      const link = Object.assign(document.createElement("a"), { href: url, download: last?.name ?? file.name ?? "file" });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1e4);
+    })().catch((failure) => setError(failure?.message ?? t("Could not save this file"))).finally(() => setBusy(-1));
+  };
+  return (0, import_react34.createElement)(
+    "div",
+    { className: "bt-group-files" },
+    files.map((file, index) => (0, import_react34.createElement)(
+      "div",
+      { key: `${file.attachmentId ?? file.name}-${index}`, className: "bt-group-file" },
+      (0, import_react34.createElement)("span", { className: "bt-group-file-name", title: file.name }, file.name ?? ""),
+      Number.isFinite(file.bytes) ? (0, import_react34.createElement)("span", { className: "bt-group-file-size" }, sizeLabel(file.bytes)) : null,
+      (0, import_react34.createElement)(
+        "button",
+        { type: "button", className: "bt-soft bt-soft-sm", disabled: busy === index, onClick: () => save(file, index) },
+        busy === index ? t("Saving…") : t("Save")
+      )
+    )),
+    error === null ? null : (0, import_react34.createElement)("span", { className: "bt-set-hint", role: "alert" }, error)
+  );
+}
+function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionId, roster, actions, msgKey, useUi, whole, time, duration, claims, changes, files }) {
   const ref = (0, import_react34.useRef)(null);
   (0, import_react34.useLayoutEffect)(() => {
     const el = ref.current;
@@ -28503,6 +28609,7 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionI
       took ? (0, import_react34.createElement)("span", { className: "bt-group-took", title: t("Ran for {duration}", { duration: took }) }, took) : null
     ),
     (0, import_react34.createElement)(Bubbles, { texts: texts2, roster, selfId: bot.id, actions, sessionId: quoteSession, msgKey, useUi, lead: flat ? null : lead, whole, textInteractionSource: true }),
+    files === void 0 ? null : (0, import_react34.createElement)(GroupFiles, { files, sessionId: quoteSession }),
     changes === void 0 ? null : (0, import_react34.createElement)(ChangesCard, { changes, actions }),
     claimLines(claims).map((line) => (0, import_react34.createElement)("div", { key: line.kind + line.text, className: `bt-claim bt-claim-${line.kind}`, role: "status", title: line.detail ?? void 0 }, line.text))
   );
@@ -28792,6 +28899,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
         const room2 = roster.roomsById[sessionId];
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
         const file = source.length === void 0 ? void 0 : (data.content ?? []).find((block) => block?.type === "file")?.attachment;
+        const attached = (data.content ?? []).filter((block) => block?.type === "file" && block.attachment !== void 0).map((block) => ({ ...block.attachment, sessionId }));
         const text = stripHeader(contentText(data.content));
         return (0, import_react34.createElement)(GroupMessage, {
           bot: poster,
@@ -28805,6 +28913,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
           time: data.time,
           claims: source.claims,
           changes: source.changes,
+          files: attached.length > 0 ? attached : void 0,
           whole: file ? { length: source.length, load: () => actions.fileText(file) } : void 0
         });
       }
@@ -29190,7 +29299,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
           goalEventText(reply)
         );
       }
-      return (0, import_react34.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, sessionId, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration, claims, changes });
+      return (0, import_react34.createElement)(GroupMessage, { key: `${reply.botId}-${index}`, bot, texts: texts2, room: room2, sessionId, roster, actions, msgKey: callId ? `${sessionId}:${callId}:${index}` : void 0, useUi, time, duration, claims, changes, files: reply.files });
     }),
     pending.map((id, at) => {
       const bot = roster.byId[id];
@@ -39363,67 +39472,6 @@ function installHeaderNavigation(slots, face, component, priority) {
     unsubscribe();
     dispose?.();
   };
-}
-
-// src/shared/file-chunks.js
-async function* fileChunks(call2, target, endpoint = "file-download", options = {}) {
-  const lookahead = Math.max(1, Number(options.lookahead) || 1);
-  const report = options.onProgress;
-  const ask = (offset2, version2) => call2(endpoint, { ...target, offset: offset2, ...version2 === void 0 ? {} : { version: version2 } });
-  const decode = (part) => Uint8Array.from(atob(part.bytes), (char) => char.charCodeAt(0));
-  const stale = () => new Error("This file is no longer available");
-  const first = await ask(0);
-  const head = decode(first);
-  if (first.nextOffset === void 0) {
-    report?.(head.length, head.length);
-    yield { ...first, data: head };
-    return;
-  }
-  if (first.nextOffset !== head.length || first.done !== true && head.length === 0) throw stale();
-  const version = first.version;
-  const step = head.length;
-  const size = Number.isFinite(first.size) ? first.size : void 0;
-  report?.(first.nextOffset, size);
-  yield { ...first, data: head };
-  if (first.done === true) return;
-  const take = (part, offset2) => {
-    const bytes = decode(part);
-    if (part.version !== version) throw stale();
-    if (part.nextOffset !== offset2 + bytes.length || part.done !== true && bytes.length === 0) throw stale();
-    return { ...part, data: bytes };
-  };
-  if (size === void 0 || step === 0) {
-    let offset2 = first.nextOffset;
-    for (; ; ) {
-      const part = take(await ask(offset2, version), offset2);
-      report?.(part.nextOffset);
-      yield part;
-      if (part.done === true) return;
-      offset2 = part.nextOffset;
-    }
-  }
-  const queue = [];
-  for (let at = first.nextOffset; at < size; at += step) queue.push(at);
-  const running = /* @__PURE__ */ new Map();
-  const fill2 = () => {
-    while (running.size < lookahead && queue.length > 0) {
-      const at = queue.shift();
-      running.set(at, ask(at, version));
-    }
-  };
-  fill2();
-  let offset = first.nextOffset;
-  for (; ; ) {
-    const waiting = running.get(offset);
-    if (waiting === void 0) throw stale();
-    const part = take(await waiting, offset);
-    running.delete(offset);
-    fill2();
-    report?.(part.nextOffset, size);
-    yield part;
-    if (part.done === true) return;
-    offset = part.nextOffset;
-  }
 }
 
 // src/client/file-target.js

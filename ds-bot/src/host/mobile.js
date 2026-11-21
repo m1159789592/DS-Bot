@@ -96,8 +96,16 @@ function reminderText(text) {
 function replyItem(reply, id, extra = {}) {
   const who = { ...(reply.botId ? { botId: reply.botId } : {}), ...(reply.name ? { name: reply.name } : {}), ...(reply.color ? { color: reply.color } : {}) }
   const time = Number.isFinite(reply.time) ? reply.time : null
-  // A file a member attached to its post is a card in the group too.
-  const files = Array.isArray(reply.files) ? reply.files.filter(file => typeof file?.attachmentId === 'string') : []
+  // A file a member attached to its post is a card in the group too. One of a row names
+  // the row in the group's book, so the phone asks for it there.
+  const files = Array.isArray(reply.files)
+    ? reply.files.filter(file => typeof file?.attachmentId === 'string').map(file => ({
+      attachmentId: file.attachmentId,
+      name: file.name ?? 'file',
+      bytes: file.bytes,
+      ...(typeof file.roomId === 'string' ? { roomId: file.roomId, seq: file.seq, index: file.index } : {}),
+    }))
+    : []
   const said = files.length > 0 ? { files } : {}
   if (reply.kind === 'user') return { id, kind: 'user', text: String(reply.text ?? ''), time, ...said, ...extra }
   if (reply.kind === undefined) return { id, kind: 'bot', ...who, text: String(reply.text ?? ''), time, ...(Number.isFinite(reply.duration) ? { duration: reply.duration } : {}), ...said, ...extra }
@@ -454,6 +462,40 @@ export function install(rt) {
     if (!Number.isSafeInteger(offset) || offset < 0) throw Object.assign(new Error('Invalid file offset'), { code: 'bot/invalid' })
     const attachments = ctx.get?.('attachments')
     if (attachments === undefined) throw Object.assign(new Error('Attachments unavailable'), { code: 'bot/refused' })
+    // A file a group post carried lives in the group's book, not in a Session: the row and
+    // the place on it name the file, and its bytes come from the store the same way.
+    if (Number.isSafeInteger(body.rowSeq) && typeof body.roomId === 'string') {
+      const record = await rt.groupLine?.(body.roomId, body.rowSeq)
+      const files = Array.isArray(record?.files) ? record.files : []
+      const file = files[Number.isSafeInteger(body.index) ? body.index : 0]
+      if (file === undefined || typeof file.attachmentId !== 'string') throw unavailable()
+      const name = nameOf(file.name ?? 'file')
+      if (chunked) {
+        const pieces = []
+        let seen = 0
+        let length = 0
+        for await (const piece of attachments.readFileStream(file, AbortSignal.timeout(HISTORY_TIMEOUT_MS))) {
+          const start = Math.max(0, offset - seen)
+          seen += piece.length
+          const data = Buffer.from(piece).subarray(start, start + FILE_CHUNK_BYTES - length)
+          if (data.length > 0) { pieces.push(data); length += data.length }
+          if (length === FILE_CHUNK_BYTES) break
+        }
+        const size = file.bytes
+        if (offset > size || (length === 0 && offset < size)) throw unavailable()
+        const nextOffset = offset + length
+        return { name, mime: mediaOf(file) ?? mimeOf(name), bytes: Buffer.concat(pieces).toString('base64'), size, version: file.attachmentId, nextOffset, done: nextOffset >= size }
+      }
+      const pieces = []
+      let size = 0
+      for await (const piece of attachments.readFileStream(file, AbortSignal.timeout(HISTORY_TIMEOUT_MS))) {
+        size += piece.length
+        if (size > FILE_DOWNLOAD_MAX) throw tooLarge()
+        pieces.push(Buffer.from(piece))
+      }
+      const bytes = Buffer.concat(pieces)
+      return { name, mime: mediaOf(file) ?? mimeOf(name), bytes: bytes.toString('base64'), size: bytes.length }
+    }
     const attachmentId = typeof body.attachmentId === 'string' ? body.attachmentId : undefined
     const presentedSeq = Number.isInteger(body.seq) ? body.seq : undefined
     const presentedIndex = Number.isInteger(body.index) ? body.index : 0
