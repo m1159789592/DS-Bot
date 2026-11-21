@@ -126,7 +126,7 @@ async function replyAudio(sessionId) {
 // a chat it is already on for reads only what arrives after it, never the history it
 // opened with.
 const ARMED_KEY = 'ds-bot:read-aloud'
-const WATCH_MS = 1500
+const WATCH_MS = 500
 const armedBefore = () => {
   try { return window.localStorage.getItem(ARMED_KEY) === 'on' } catch { return false }
 }

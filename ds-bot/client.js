@@ -38419,7 +38419,7 @@ async function replyAudio(sessionId) {
   }
 }
 var ARMED_KEY = "ds-bot:read-aloud";
-var WATCH_MS = 1500;
+var WATCH_MS = 500;
 var armedBefore = () => {
   try {
     return window.localStorage.getItem(ARMED_KEY) === "on";
