@@ -3,6 +3,8 @@
 // computer; the audio comes back in the same chunks a file download uses, because one
 // encrypted message carries 4 MB and a long reply is larger than that.
 import { createHash } from 'node:crypto'
+import { HANDOFF_ACK, HISTORY_TIMEOUT_MS } from './constants.js'
+import { textOf } from './text.js'
 
 const TTS_URL = 'https://api.deepseek.com/v1/tools/tts'
 // The key is a secret the user added to DS Bot. DSH's own credential store is not read.
@@ -53,8 +55,26 @@ export function fixWav(buffer) {
 }
 
 export function install(rt) {
+  const { ctx } = rt
   // Newest first: a Map keeps insertion order, so the first key is the oldest.
   const spoken = new Map()
+
+  // The reply a chat would read: the last message its Bot wrote there. A fresh part opens
+  // with a fixed note that is not the Bot speaking, so that one is skipped.
+  async function lastReply(sessionId) {
+    if (typeof sessionId !== 'string' || sessionId === '') return ''
+    const page = await ctx.sessionController.page(
+      { address: { kind: 'session', sessionId }, maxMessages: 80 },
+      AbortSignal.timeout(HISTORY_TIMEOUT_MS),
+    )
+    for (let index = page.records.length - 1; index >= 0; index -= 1) {
+      const event = page.records[index]?.event
+      if (event?.type !== 'assistant/message') continue
+      const text = textOf(event.data?.message?.content)
+      if (text !== '' && text !== HANDOFF_ACK) return text
+    }
+    return ''
+  }
 
   async function synthesize(text, voice, key) {
     let upstream
@@ -75,32 +95,38 @@ export function install(rt) {
     return fixWav(Buffer.from(await upstream.arrayBuffer()))
   }
 
-  // One reply at a time, in pieces: the phone asks again with the offset it reached.
+  // One reply at a time, in pieces: the phone asks again with the offset it reached,
+  // and the desktop client asks with the version it already has.
   async function readAloud(body) {
     const voice = VOICES.includes(body?.voice) ? body.voice : VOICES[0]
     const offset = body?.offset ?? 0
     if (!Number.isSafeInteger(offset) || offset < 0) throw Object.assign(new Error('Invalid audio offset'), { code: 'bot/invalid' })
-    const raw = speechText(body?.text ?? '')
-    if (raw === '') throw Object.assign(new Error('Nothing to read'), { code: 'bot/invalid' })
-    const full = Array.from(raw)
-    const text = full.slice(0, MAX_CHARS).join('')
-    const version = createHash('sha256').update(voice).update('\u0000').update(text).digest('hex').slice(0, 24)
 
-    let audio = spoken.get(version)?.audio
-    if (audio === undefined) {
-      const key = rt.secretValue?.(KEY_SECRET) ?? process.env[KEY_SECRET]
-      if (typeof key !== 'string' || key === '') {
-        throw refused(`Add a secret named ${KEY_SECRET} in Settings → Secrets to read replies aloud`)
+    let version = typeof body?.version === 'string' ? body.version : undefined
+    let made = version === undefined ? undefined : spoken.get(version)
+    if (made === undefined) {
+      const raw = speechText(body?.text ?? await lastReply(body?.sessionId))
+      const full = Array.from(raw)
+      const text = full.slice(0, MAX_CHARS).join('')
+      if (text === '') throw Object.assign(new Error('Nothing to read'), { code: 'bot/invalid' })
+      version = createHash('sha256').update(voice).update('\u0000').update(text).digest('hex').slice(0, 24)
+      made = spoken.get(version)
+      if (made === undefined) {
+        const key = rt.secretValue?.(KEY_SECRET) ?? process.env[KEY_SECRET]
+        if (typeof key !== 'string' || key === '') {
+          throw refused(`Add a secret named ${KEY_SECRET} in Settings → Secrets to read replies aloud`)
+        }
+        made = { audio: await synthesize(text, voice, key), chars: text.length, truncated: full.length > MAX_CHARS }
+        spoken.set(version, made)
+        while (spoken.size > KEPT) spoken.delete(spoken.keys().next().value)
       }
-      audio = await synthesize(text, voice, key)
-      spoken.set(version, { audio })
-      while (spoken.size > KEPT) spoken.delete(spoken.keys().next().value)
     } else {
       // Reinsert so the reply that is being replayed is the last to go.
       spoken.delete(version)
-      spoken.set(version, { audio })
+      spoken.set(version, made)
     }
 
+    const audio = made.audio
     if (offset > audio.length) throw Object.assign(new Error('This audio is no longer available'), { code: 'bot/stale' })
     const slice = audio.subarray(offset, offset + CHUNK_BYTES)
     const nextOffset = offset + slice.length
@@ -112,8 +138,8 @@ export function install(rt) {
       bytes: slice.toString('base64'),
       nextOffset,
       done: nextOffset >= audio.length,
-      chars: Array.from(text).length,
-      truncated: full.length > MAX_CHARS,
+      chars: made.chars,
+      truncated: made.truncated,
     }
   }
 

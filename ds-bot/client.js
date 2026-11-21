@@ -13543,6 +13543,11 @@ var ZH = {
   Dictate: "听写",
   "Start voice chat": "开始语音对话",
   "Voice chat": "语音对话",
+  "Read aloud": "朗读",
+  "Stop reading": "停止朗读",
+  "Read the last reply aloud": "朗读最后一条回复",
+  "Could not read this reply aloud": "这条回复朗读失败",
+  "This reply cannot be read now": "这条回复现在读不了",
   Listening: "在听",
   Thinking: "思考中",
   "Thinking…": "思考中…",
@@ -17757,6 +17762,14 @@ function WaveIcon({ size = 16 }) {
     "svg",
     { width: size, height: size, viewBox: "0 0 20 20", fill: "currentColor", "aria-hidden": true },
     [[3, 7.5, 5], [6.5, 4.5, 11], [10, 2.5, 15], [13.5, 5.5, 9], [17, 8, 4]].map(([x, y, height]) => (0, import_react3.createElement)("rect", { key: x, x: x - 1, y, width: 2, height, rx: 1 }))
+  );
+}
+function SpeakerIcon({ size = 16 }) {
+  return (0, import_react3.createElement)(
+    "svg",
+    { width: size, height: size, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true },
+    (0, import_react3.createElement)("path", { d: "M3.6 7.8h2.6L10 4.6v10.8L6.2 12.2H3.6z" }),
+    (0, import_react3.createElement)("path", { d: "M12.9 7.4a3.6 3.6 0 0 1 0 5.2M15.2 5.1a7 7 0 0 1 0 9.8" })
   );
 }
 function ShareIcon() {
@@ -38363,6 +38376,78 @@ function ComposerVoice({ sessionId, inputActions, actions, useUi, useRoster }) {
     dictation.note ? (0, import_react55.createElement)("span", { className: "bt-mic-note", role: "status" }, dictation.note) : null
   );
 }
+var audioBytes = (value) => Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+async function replyAudio(sessionId) {
+  const pieces = [];
+  let offset = 0;
+  let version;
+  for (; ; ) {
+    const part = await call("read-aloud", { sessionId, offset, ...version === void 0 ? {} : { version } });
+    const data = audioBytes(part.bytes);
+    if (part.nextOffset !== offset + data.length) throw new Error(t("This reply cannot be read now"));
+    pieces.push(data);
+    version = part.version;
+    if (part.done === true) return new Blob(pieces, { type: part.mime ?? "audio/wav" });
+    offset = part.nextOffset;
+  }
+}
+function ComposerReadAloud({ sessionId }) {
+  const [playing, setPlaying] = (0, import_react55.useState)(false);
+  const [note, setNote] = (0, import_react55.useState)("");
+  const audio = (0, import_react55.useRef)(null);
+  (0, import_react55.useEffect)(() => () => {
+    audio.current?.pause();
+    audio.current = null;
+  }, []);
+  (0, import_react55.useEffect)(() => {
+    if (!note) return void 0;
+    const timer = setTimeout(() => setNote(""), 2600);
+    return () => clearTimeout(timer);
+  }, [note]);
+  const stop = () => {
+    audio.current?.pause();
+    audio.current = null;
+    setPlaying(false);
+  };
+  const say = async () => {
+    if (playing) {
+      stop();
+      return;
+    }
+    if (sessionId === void 0) return;
+    setPlaying(true);
+    setNote("");
+    try {
+      const url = URL.createObjectURL(await replyAudio(sessionId));
+      const next = new Audio(url);
+      audio.current = next;
+      next.addEventListener("ended", () => {
+        URL.revokeObjectURL(url);
+        if (audio.current !== next) return;
+        audio.current = null;
+        setPlaying(false);
+      });
+      await next.play();
+    } catch (failure) {
+      stop();
+      setNote(failure?.message ?? t("Could not read this reply aloud"));
+    }
+  };
+  return (0, import_react55.createElement)(
+    import_react55.Fragment,
+    null,
+    (0, import_react55.createElement)("button", {
+      type: "button",
+      className: "bt-mic",
+      "aria-label": playing ? t("Stop reading") : t("Read the last reply aloud"),
+      "aria-pressed": playing,
+      title: playing ? t("Stop reading") : t("Read aloud"),
+      onMouseDown: keepComposerFocus,
+      onClick: say
+    }, (0, import_react55.createElement)(SpeakerIcon)),
+    note ? (0, import_react55.createElement)("span", { className: "bt-mic-note", role: "status" }, note) : null
+  );
+}
 function menuIcons(roster) {
   const marks = /* @__PURE__ */ new Map();
   return (row) => {
@@ -46584,6 +46669,7 @@ function apply(ctx) {
     () => shadow("conversation.input.left", { id: "bot-paste", order: -110, inject: face }, PasteGuard),
     () => shadow("conversation.input.left", { id: "bot-plus", order: -100, inject: face }, ComposerPlus),
     () => shadow("conversation.input.right", { id: "bot-voice", order: 100, inject: face }, ComposerVoice),
+    () => shadow("conversation.input.right", { id: "bot-read", order: 90 }, ComposerReadAloud),
     () => shadow("conversation.composer", {
       priority: BOT_PRIORITY,
       select: (owner) => owner.pendingInteraction?.kind === "question" ? owner.pendingInteraction : null

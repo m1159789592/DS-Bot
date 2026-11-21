@@ -50,6 +50,17 @@ that trusts the header does: the file is 0 bytes long as far as it can tell.
 `read-aloud` joins the hello capabilities. A phone that knows it draws the speaker; an
 older host never gets the call and the phone hides the control.
 
+## On the computer
+
+A speaker button sits in the composer beside the voice-chat button, where the send
+control is. It reads the chat's last reply and turns into a stop button while it speaks;
+the second click stops. The desktop does not speak by itself: a reply it reads without
+being asked would talk over whatever the user is doing.
+
+The client joins the same pieces the phone takes (`replyAudio` in
+`src/client/composer.js`) and plays them with `Audio`, so nothing about the key or the
+voice touches the browser.
+
 ## On the phone
 
 `src/team/read-aloud.ts` holds the piece loop, the cache directory and one player, so only

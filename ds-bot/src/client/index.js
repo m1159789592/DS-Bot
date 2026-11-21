@@ -13,7 +13,7 @@ import { installSettingsShell, SETTINGS_SHELL_CSS } from './settings-shell.js'
 import { frameLayout, readSidebar, writeSidebar, toggledPref, DSH_NARROW } from './frame-layout.js'
 import { installFrameWatch } from './frame-watch.js'
 import { HeaderPill } from './header.js'
-import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
+import { ComposerPlus, ComposerReadAloud, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
 import { BtwDock, BtwTurnTail } from './btw.js'
 import { SIDE_CSS, sideSource } from './side-chat.js'
@@ -1290,6 +1290,7 @@ export function apply(ctx) {
     () => shadow('conversation.input.left', { id: 'bot-paste', order: -110, inject: face }, PasteGuard),
     () => shadow('conversation.input.left', { id: 'bot-plus', order: -100, inject: face }, ComposerPlus),
     () => shadow('conversation.input.right', { id: 'bot-voice', order: 100, inject: face }, ComposerVoice),
+    () => shadow('conversation.input.right', { id: 'bot-read', order: 90 }, ComposerReadAloud),
     () => shadow('conversation.composer', {
       priority: BOT_PRIORITY,
       select: owner => (owner.pendingInteraction?.kind === 'question' ? owner.pendingInteraction : null),

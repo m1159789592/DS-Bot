@@ -21,8 +21,11 @@ function streamedWav(samples) {
   return Buffer.concat([header, Buffer.alloc(samples * 2, 7)])
 }
 
-function runtime({ key = 'test-key' } = {}) {
-  const rt = { secretValue: name => (name === 'DEEPSEEK_API_KEY' ? key : undefined) }
+function runtime({ key = 'test-key', page } = {}) {
+  const rt = {
+    secretValue: name => (name === 'DEEPSEEK_API_KEY' ? key : undefined),
+    ctx: { sessionController: { page: page ?? (async () => ({ records: [] })) } },
+  }
   install(rt)
   return rt
 }
@@ -104,4 +107,38 @@ test('no key means a refusal that names the secret to add', async () => {
 test('nothing to say is refused rather than sent', async () => {
   const rt = runtime()
   await assert.rejects(() => rt.readAloud({ text: '**', voice: 'stella' }), error => error.code === 'bot/invalid')
+})
+
+// The desktop client asks once per piece with the version it already has, so a long
+// reply is not made twice.
+test('a second piece of the same reply is not made again', async () => {
+  const wav = streamedWav(300 * 1024)
+  await withVoice(wav, async calls => {
+    const rt = runtime()
+    const first = await rt.readAloud({ text: 'A long reply.', voice: 'stella' })
+    const second = await rt.readAloud({ version: first.version, offset: first.nextOffset, voice: 'stella' })
+    assert.equal(second.version, first.version)
+    assert.equal(second.done, true)
+    assert.equal(calls(), 1)
+  })
+})
+
+test('with no text the last reply of the chat is read', async () => {
+  const page = async () => ({
+    records: [
+      { event: { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'The older answer.' }] } } } },
+      { event: { type: 'user/message', data: { message: { content: [{ type: 'text', text: 'A question.' }] } } } },
+      { event: { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'The newest answer.' }] } } } },
+    ],
+  })
+  await withVoice(streamedWav(40), async () => {
+    const rt = runtime({ page })
+    const spoken = await rt.readAloud({ sessionId: 's1', voice: 'stella' })
+    assert.equal(spoken.chars, 'The newest answer.'.length)
+  })
+})
+
+test('a chat with no reply is refused', async () => {
+  const rt = runtime()
+  await assert.rejects(() => rt.readAloud({ sessionId: 's1', voice: 'stella' }), error => error.code === 'bot/invalid')
 })

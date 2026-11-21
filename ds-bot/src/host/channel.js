@@ -358,6 +358,9 @@ export function install(rt) {
           const read = await rt.fileText(body.file)
           return read === undefined ? fail('This file cannot be read here', 'bot/unavailable') : ok(read)
         }
+        // The reply a chat would read out loud, in the pieces a phone takes.
+        case 'read-aloud':
+          return ok(await rt.readAloud(body ?? {}))
         case 'earlier':
           await rt.load()
           return ok(await rt.earlierPage(String(body.sessionId ?? ''), body.cursor ?? undefined))

@@ -1,6 +1,7 @@
 import { createElement as h, Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChatsIcon, ClockIcon, GoalIcon, MicIcon, PaperclipIcon, PeopleIcon, PlusIcon, WaveIcon } from './icons.js'
+import { ChatsIcon, ClockIcon, GoalIcon, MicIcon, PaperclipIcon, PeopleIcon, PlusIcon, SpeakerIcon, WaveIcon } from './icons.js'
+import { call } from './api.js'
 import { canSetGoal } from './goal.js'
 import { BotMark } from './mark.js'
 import { stepMenuFocus, useLinger, useViewport, viewBottom } from './motion.js'
@@ -99,6 +100,68 @@ export function ComposerVoice({ sessionId, inputActions, actions, useUi, useRost
       onMouseDown: keepComposerFocus, onClick: () => actions.openVoice(sessionId),
     }, h(WaveIcon, { size: 18 })),
     dictation.note ? h('span', { className: 'bt-mic-note', role: 'status' }, dictation.note) : null)
+}
+
+// Reading the last reply out loud (docs/plans/2026-11-21-read-aloud.md). The voice is
+// made by the host, which keeps the key; this only joins the pieces and plays them.
+const audioBytes = value => Uint8Array.from(atob(value), char => char.charCodeAt(0))
+
+async function replyAudio(sessionId) {
+  const pieces = []
+  let offset = 0
+  let version
+  for (;;) {
+    const part = await call('read-aloud', { sessionId, offset, ...(version === undefined ? {} : { version }) })
+    const data = audioBytes(part.bytes)
+    // A piece that went missing is refused instead of played as a shorter reply.
+    if (part.nextOffset !== offset + data.length) throw new Error(t('This reply cannot be read now'))
+    pieces.push(data)
+    version = part.version
+    if (part.done === true) return new Blob(pieces, { type: part.mime ?? 'audio/wav' })
+    offset = part.nextOffset
+  }
+}
+
+export function ComposerReadAloud({ sessionId }) {
+  const [playing, setPlaying] = useState(false)
+  const [note, setNote] = useState('')
+  const audio = useRef(null)
+  useEffect(() => () => { audio.current?.pause(); audio.current = null }, [])
+  useEffect(() => {
+    if (!note) return undefined
+    const timer = setTimeout(() => setNote(''), 2600)
+    return () => clearTimeout(timer)
+  }, [note])
+  const stop = () => { audio.current?.pause(); audio.current = null; setPlaying(false) }
+  const say = async () => {
+    // The same button stops what it started.
+    if (playing) { stop(); return }
+    if (sessionId === undefined) return
+    setPlaying(true)
+    setNote('')
+    try {
+      const url = URL.createObjectURL(await replyAudio(sessionId))
+      const next = new Audio(url)
+      audio.current = next
+      next.addEventListener('ended', () => {
+        URL.revokeObjectURL(url)
+        if (audio.current !== next) return
+        audio.current = null
+        setPlaying(false)
+      })
+      await next.play()
+    } catch (failure) {
+      stop()
+      setNote(failure?.message ?? t('Could not read this reply aloud'))
+    }
+  }
+  return h(Fragment, null,
+    h('button', {
+      type: 'button', className: 'bt-mic', 'aria-label': playing ? t('Stop reading') : t('Read the last reply aloud'),
+      'aria-pressed': playing, title: playing ? t('Stop reading') : t('Read aloud'),
+      onMouseDown: keepComposerFocus, onClick: say,
+    }, h(SpeakerIcon)),
+    note ? h('span', { className: 'bt-mic-note', role: 'status' }, note) : null)
 }
 
 // Character marks for the "@" menu rows. Each Bot keeps one component, so the menu

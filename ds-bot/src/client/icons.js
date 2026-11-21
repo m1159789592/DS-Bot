@@ -29,6 +29,13 @@ export function WaveIcon({ size = 16 }) {
     [[3, 7.5, 5], [6.5, 4.5, 11], [10, 2.5, 15], [13.5, 5.5, 9], [17, 8, 4]].map(([x, y, height]) => h('rect', { key: x, x: x - 1, y, width: 2, height, rx: 1 })))
 }
 
+// The read-aloud glyph: a speaker with the sound leaving it.
+export function SpeakerIcon({ size = 16 }) {
+  return h('svg', { width: size, height: size, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+    h('path', { d: 'M3.6 7.8h2.6L10 4.6v10.8L6.2 12.2H3.6z' }),
+    h('path', { d: 'M12.9 7.4a3.6 3.6 0 0 1 0 5.2M15.2 5.1a7 7 0 0 1 0 9.8' }))
+}
+
 export function ShareIcon() {
   return h('svg', { width: 16, height: 16, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
     h('path', { d: 'M10 12.5V3M6.5 6.5L10 3l3.5 3.5M4 11v4.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V11' }))
