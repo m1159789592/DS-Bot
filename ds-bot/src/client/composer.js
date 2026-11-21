@@ -144,6 +144,11 @@ export function ComposerReadAloud({ sessionId }) {
   const run = useRef(0)
   // The newest reply this chat had when the switch last looked, so it is not read twice.
   const seen = useRef({ chat: '', token: '' })
+  // Speaking is one reply at a time. A reply that lands while another is being read waits
+  // for that one to end instead of talking over it.
+  const speaking = useRef(false)
+  const pending = useRef(false)
+  const mark = (on) => { speaking.current = on; setPlaying(on) }
   useEffect(() => () => {
     run.current += 1
     audio.current?.pause()
@@ -158,14 +163,16 @@ export function ComposerReadAloud({ sessionId }) {
     run.current += 1
     audio.current?.pause()
     audio.current = null
-    setPlaying(false)
+    pending.current = false
+    mark(false)
   }
   // Another chat is another conversation: it opens with its own baseline, unheard.
   useEffect(() => {
     run.current += 1
     audio.current?.pause()
     audio.current = null
-    setPlaying(false)
+    pending.current = false
+    mark(false)
     seen.current = { chat: '', token: '' }
   }, [sessionId])
   useEffect(() => {
@@ -175,7 +182,7 @@ export function ComposerReadAloud({ sessionId }) {
     const play = async () => {
       const mine = run.current + 1
       run.current = mine
-      setPlaying(true)
+      mark(true)
       setNote('')
       let url
       try {
@@ -187,14 +194,17 @@ export function ComposerReadAloud({ sessionId }) {
           URL.revokeObjectURL(url)
           if (audio.current !== next) return
           audio.current = null
-          setPlaying(false)
+          mark(false)
+          // The reply that arrived meanwhile takes its turn now.
+          if (pending.current) { pending.current = false; void play() }
         })
         await next.play()
         if (run.current !== mine) { next.pause(); URL.revokeObjectURL(url) }
       } catch (failure) {
         if (run.current !== mine) return
+        const text = failure?.message ?? t('Could not read this reply aloud')
         stop()
-        setNote(failure?.message ?? t('Could not read this reply aloud'))
+        setNote(text)
       }
     }
     // The host names the newest reply; a different name than the one this chat opened
@@ -209,6 +219,7 @@ export function ComposerReadAloud({ sessionId }) {
         if (seen.current.chat !== sessionId) { seen.current = { chat: sessionId, token }; return }
         if (seen.current.token === token) return
         seen.current = { chat: sessionId, token }
+        if (speaking.current) { pending.current = true; return }
         void play()
       } catch {
         // Nothing to read yet, or the host is busy: the next tick asks again.

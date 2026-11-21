@@ -38440,6 +38440,12 @@ function ComposerReadAloud({ sessionId }) {
   const audio = (0, import_react55.useRef)(null);
   const run2 = (0, import_react55.useRef)(0);
   const seen = (0, import_react55.useRef)({ chat: "", token: "" });
+  const speaking = (0, import_react55.useRef)(false);
+  const pending = (0, import_react55.useRef)(false);
+  const mark2 = (on) => {
+    speaking.current = on;
+    setPlaying(on);
+  };
   (0, import_react55.useEffect)(() => () => {
     run2.current += 1;
     audio.current?.pause();
@@ -38454,13 +38460,15 @@ function ComposerReadAloud({ sessionId }) {
     run2.current += 1;
     audio.current?.pause();
     audio.current = null;
-    setPlaying(false);
+    pending.current = false;
+    mark2(false);
   };
   (0, import_react55.useEffect)(() => {
     run2.current += 1;
     audio.current?.pause();
     audio.current = null;
-    setPlaying(false);
+    pending.current = false;
+    mark2(false);
     seen.current = { chat: "", token: "" };
   }, [sessionId]);
   (0, import_react55.useEffect)(() => {
@@ -38470,7 +38478,7 @@ function ComposerReadAloud({ sessionId }) {
     const play = async () => {
       const mine = run2.current + 1;
       run2.current = mine;
-      setPlaying(true);
+      mark2(true);
       setNote("");
       let url;
       try {
@@ -38485,7 +38493,11 @@ function ComposerReadAloud({ sessionId }) {
           URL.revokeObjectURL(url);
           if (audio.current !== next) return;
           audio.current = null;
-          setPlaying(false);
+          mark2(false);
+          if (pending.current) {
+            pending.current = false;
+            void play();
+          }
         });
         await next.play();
         if (run2.current !== mine) {
@@ -38494,8 +38506,9 @@ function ComposerReadAloud({ sessionId }) {
         }
       } catch (failure) {
         if (run2.current !== mine) return;
+        const text = failure?.message ?? t("Could not read this reply aloud");
         stop();
-        setNote(failure?.message ?? t("Could not read this reply aloud"));
+        setNote(text);
       }
     };
     const tick = async () => {
@@ -38511,6 +38524,10 @@ function ComposerReadAloud({ sessionId }) {
         }
         if (seen.current.token === token) return;
         seen.current = { chat: sessionId, token };
+        if (speaking.current) {
+          pending.current = true;
+          return;
+        }
         void play();
       } catch {
       } finally {
